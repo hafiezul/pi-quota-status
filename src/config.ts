@@ -26,10 +26,10 @@ export const DEFAULT_CONFIG: Required<
 			models: ["claude-*"],
 		},
 		{
-			name: "generic-openai-compatible",
+			name: "openai",
 			type: "generic",
-			provider: "*",
-			models: ["*"],
+			provider: "openai*",
+			models: ["gpt-*", "o*", "chatgpt-*"],
 			dimensions: [
 				{
 					dimension: "requests",
@@ -59,6 +59,7 @@ export const CONFIG_TEMPLATE: QuotaStatusConfig = {
 		{
 			name: "anthropic",
 			type: "anthropic",
+			enabled: true,
 			provider: "anthropic",
 			models: ["claude-*"],
 			fallback: {
@@ -70,9 +71,9 @@ export const CONFIG_TEMPLATE: QuotaStatusConfig = {
 			},
 		},
 		{
-			name: "openai-example",
+			name: "openai",
 			type: "generic",
-			enabled: false,
+			enabled: true,
 			provider: "openai*",
 			models: ["gpt-*", "o*", "chatgpt-*"],
 			dimensions: [

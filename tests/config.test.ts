@@ -1,6 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeConfig } from "../src/config.js";
+import { mkdir, readFile, rm } from "node:fs/promises";
+import { join } from "node:path";
+import {
+	ensureConfigTemplate,
+	loadConfig,
+	normalizeConfig,
+} from "../src/config.js";
 import { adapterMatches, matchesGlob, selectAdapter } from "../src/match.js";
 import {
 	buildQuotaRows,
@@ -13,6 +19,17 @@ import {
 import type { QuotaState, QuotaStatusConfig } from "../src/types.js";
 
 const now = Date.UTC(2026, 0, 1, 0, 0, 0);
+
+async function createTempDir(): Promise<string> {
+	const dir = [
+		".tmp-quota-status-test",
+		process.pid,
+		Date.now(),
+		Math.random().toString(16).slice(2),
+	].join("-");
+	await mkdir(dir, { recursive: true });
+	return dir;
+}
 
 test("glob matching supports provider plus model globs", () => {
 	assert.equal(matchesGlob("claude-sonnet-4", "claude-*"), true);
@@ -43,6 +60,59 @@ test("selectAdapter returns first matching enabled adapter", () => {
 		selectAdapter(config, "anthropic", "claude-sonnet-4")?.name,
 		"match",
 	);
+});
+
+test("missing config defaults to Anthropic and OpenAI adapters", async () => {
+	const dir = await createTempDir();
+	try {
+		const result = await loadConfig(join(dir, "missing-config.json"));
+		assert.equal(
+			selectAdapter(result.value, "anthropic", "claude-sonnet-4")?.name,
+			"anthropic",
+		);
+		assert.equal(
+			selectAdapter(result.value, "openai", "gpt-5.5")?.name,
+			"openai",
+		);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("config template creates enabled Anthropic and OpenAI adapters", async () => {
+	const dir = await createTempDir();
+	const configFile = join(dir, "config.json");
+	try {
+		const result = await ensureConfigTemplate(configFile);
+		assert.equal(result.created, true);
+		assert.deepEqual(
+			result.value.adapters?.map((adapter) => adapter.name),
+			["anthropic", "openai"],
+		);
+		assert.equal(
+			selectAdapter(result.value, "anthropic", "claude-sonnet-4")?.name,
+			"anthropic",
+		);
+		assert.equal(
+			selectAdapter(result.value, "openai", "gpt-5.5")?.name,
+			"openai",
+		);
+
+		const written = JSON.parse(
+			await readFile(configFile, "utf8"),
+		) as QuotaStatusConfig;
+		assert.equal(
+			written.adapters?.find((adapter) => adapter.name === "anthropic")
+				?.enabled,
+			true,
+		);
+		assert.equal(
+			written.adapters?.find((adapter) => adapter.name === "openai")?.enabled,
+			true,
+		);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
 });
 
 test("selectQuotaForModel uses the most constrained dimension", () => {
