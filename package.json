@@ -4,6 +4,14 @@
   "description": "Pi extension package that adds compact provider quota/reset status to the footer.",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hafiezul/pi-quota-status.git"
+  },
+  "bugs": {
+    "url": "https://github.com/hafiezul/pi-quota-status/issues"
+  },
+  "homepage": "https://github.com/hafiezul/pi-quota-status#readme",
   "keywords": [
     "pi-package",
     "pi-extension",

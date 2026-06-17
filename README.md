@@ -1,5 +1,8 @@
 # pi-quota-status
 
+[![npm version](https://img.shields.io/npm/v/pi-quota-status.svg)](https://www.npmjs.com/package/pi-quota-status)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 `pi-quota-status` is a Pi extension package that adds a compact subscription quota/reset indicator beside Pi's default footer statusline.
 
 ```text
@@ -20,21 +23,41 @@ Current support is split by how quota data is exposed:
 
 The extension only displays quota for models Pi reports as using `/login` OAuth. If the same provider/model is configured with an API key, it is ignored.
 
-## Install by path
+## Requirements
 
-From this checkout:
+- Pi coding agent with extension package support.
+- Node.js `>=22.19.0`.
+- A provider/model authenticated through Pi's `/login` OAuth flow for subscription quota display.
+
+This package is a Pi extension package, not a standalone CLI.
+
+## Install
+
+From npm:
 
 ```bash
-pi install /Users/hj88956/Workspace/personal/pi-quota-status
+pi install npm:pi-quota-status
 ```
 
 Or try it for one run:
 
 ```bash
-pi -e /Users/hj88956/Workspace/personal/pi-quota-status
+pi -e npm:pi-quota-status
 ```
 
-After editing config, run `/quota reload` in Pi.
+From GitHub:
+
+```bash
+pi install git:github.com/hafiezul/pi-quota-status
+```
+
+## Quick start
+
+1. Install the package with one of the commands above.
+2. Start Pi with a `/login` subscription model.
+3. Run `/quota` to view tracked quota rows.
+4. Run `/quota config` if you want to create or edit adapter settings.
+5. After editing config, run `/quota reload` in Pi.
 
 ## Commands
 
