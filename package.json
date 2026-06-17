@@ -1,0 +1,42 @@
+{
+  "name": "pi-quota-status",
+  "version": "0.1.0",
+  "description": "Pi extension package that adds compact provider quota/reset status to the footer.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "quota",
+    "statusline"
+  ],
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "scripts": {
+    "test": "node -e \"require('node:fs').rmSync('.tmp-test',{recursive:true,force:true})\" && tsc -p tsconfig.test.json && node --test .tmp-test/tests/*.test.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@types/node": "^24.0.0",
+    "typescript": "^6.0.0"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}
