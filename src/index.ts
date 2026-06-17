@@ -90,7 +90,10 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 		}
 		const selected = selectQuotaForModel(runtime.state, runtime.config, ref);
 		if (!selected) {
-			ctx.ui.setStatus(STATUS_KEY, formatUnavailableSubscriptionStatus(ctx, ref));
+			ctx.ui.setStatus(
+				STATUS_KEY,
+				formatUnavailableSubscriptionStatus(ctx, ref),
+			);
 			return;
 		}
 		const text = formatFooterText(
@@ -150,12 +153,9 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 		updateStatus(ctx);
 		await refreshAndUpdateStatus(ctx);
 		if (runtime.refreshTimer) clearInterval(runtime.refreshTimer);
-		runtime.refreshTimer = setInterval(
-			() => {
-				void refreshAndUpdateStatus(ctx);
-			},
-			runtime.config.refreshIntervalMs ?? 60_000,
-		);
+		runtime.refreshTimer = setInterval(() => {
+			void refreshAndUpdateStatus(ctx);
+		}, runtime.config.refreshIntervalMs ?? 60_000);
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
@@ -310,9 +310,7 @@ function buildDebugReport(runtime: RuntimeState, ctx: PiContext): string {
 		`Context usage: ${formatContextUsage(ctx) ?? "unknown"}`,
 	];
 	if (active && isUsingSubscription(ctx, active)) {
-		lines.push(
-			"Quota source: unavailable for subscription auth unless provider rate-limit headers are exposed or fallback is enabled",
-		);
+		lines.push(`Quota source: ${formatQuotaSource(runtime, active)}`);
 	}
 	if (runtime.lastErrors.length > 0) {
 		lines.push(
@@ -361,9 +359,8 @@ function buildUnavailableQuotaMessage(
 		const context = formatContextUsage(ctx);
 		return [
 			"No provider quota data for the active subscription model.",
-			"Pi exposes subscription auth and context usage to extensions, but not subscription quota.",
+			"Quota appears after a successful subscription poll, provider rate-limit headers, or a manual fallback.",
 			context ? `Context usage: ${context}` : undefined,
-			"Quota appears only when provider rate-limit headers are present or a manual fallback is enabled.",
 		]
 			.filter((line): line is string => Boolean(line))
 			.join("\n");
@@ -394,6 +391,23 @@ function formatSubscriptionAuth(ctx: PiContext, ref: ModelRef): string {
 	return isUsingSubscription(ctx, ref) ? "yes" : "no";
 }
 
+function formatQuotaSource(runtime: RuntimeState, ref: ModelRef): string {
+	const observation =
+		runtime.state.observations[modelKey(ref.provider, ref.model)];
+	switch (observation?.source) {
+		case "subscription":
+			return "subscription poll";
+		case "headers":
+			return "provider headers";
+		case "429":
+			return "provider 429 response";
+		case "fallback":
+			return "manual fallback estimate";
+		default:
+			return "pending subscription poll, provider headers, or fallback";
+	}
+}
+
 function resolveModel(ctx: PiContext, ref: ModelRef): PiModel | undefined {
 	if (ctx.model?.provider === ref.provider && ctx.model.id === ref.model)
 		return ctx.model;
@@ -407,8 +421,7 @@ function resolveModel(ctx: PiContext, ref: ModelRef): PiModel | undefined {
 function formatContextUsage(ctx: PiContext): string | undefined {
 	const usage = ctx.getContextUsage?.();
 	if (!usage || usage.contextWindow <= 0) return undefined;
-	const percent =
-		usage.percent === null ? "?" : `${usage.percent.toFixed(1)}%`;
+	const percent = usage.percent === null ? "?" : `${usage.percent.toFixed(1)}%`;
 	return `${percent}/${formatTokenCount(usage.contextWindow)}`;
 }
 

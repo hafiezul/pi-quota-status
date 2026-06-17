@@ -74,6 +74,80 @@ test("selectQuotaForModel uses the most constrained dimension", () => {
 	assert.equal(selected?.percentRemaining, 8);
 });
 
+test("subscription quota prefers the short reset window over weekly", () => {
+	const config: QuotaStatusConfig = normalizeConfig({
+		adapters: [{ name: "generic", provider: "openai-codex", models: ["*"] }],
+	});
+	const state: QuotaState = { version: 1, observations: {} };
+	const ref = { provider: "openai-codex", model: "gpt-5.5" };
+	upsertObservation(
+		state,
+		observationFromParsed(
+			ref,
+			{ name: "subscription" },
+			{
+				dimensions: [
+					{
+						name: "5h",
+						limit: 100,
+						remaining: 97,
+						resetAt: now + 5 * 60 * 60 * 1000,
+					},
+					{
+						name: "weekly",
+						limit: 100,
+						remaining: 49,
+						resetAt: now + 5 * 24 * 60 * 60 * 1000,
+					},
+				],
+			},
+			"subscription",
+			200,
+			now,
+		),
+	);
+	const selected = selectQuotaForModel(state, config, ref, now);
+	assert.equal(selected?.dimension.name, "5h");
+	assert.equal(selected?.percentRemaining, 97);
+});
+
+test("subscription quota still surfaces an exhausted weekly window", () => {
+	const config: QuotaStatusConfig = normalizeConfig({
+		adapters: [{ name: "generic", provider: "openai-codex", models: ["*"] }],
+	});
+	const state: QuotaState = { version: 1, observations: {} };
+	const ref = { provider: "openai-codex", model: "gpt-5.5" };
+	upsertObservation(
+		state,
+		observationFromParsed(
+			ref,
+			{ name: "subscription" },
+			{
+				dimensions: [
+					{
+						name: "5h",
+						limit: 100,
+						remaining: 97,
+						resetAt: now + 5 * 60 * 60 * 1000,
+					},
+					{
+						name: "weekly",
+						limit: 100,
+						remaining: 0,
+						resetAt: now + 5 * 24 * 60 * 60 * 1000,
+					},
+				],
+			},
+			"subscription",
+			200,
+			now,
+		),
+	);
+	const selected = selectQuotaForModel(state, config, ref, now);
+	assert.equal(selected?.dimension.name, "weekly");
+	assert.equal(selected?.percentRemaining, 0);
+});
+
 test("fallback initializes and deducts fixed-window turns", () => {
 	const config: QuotaStatusConfig = normalizeConfig({
 		adapters: [
@@ -126,12 +200,7 @@ test("fallback rows are not synthesized for unobserved models", () => {
 
 	assert.equal(selectQuotaForModel(state, config, ref, now), undefined);
 	assert.deepEqual(
-		buildQuotaRows(
-			config,
-			state,
-			[{ provider: "openai", id: "gpt-5.5" }],
-			now,
-		),
+		buildQuotaRows(config, state, [{ provider: "openai", id: "gpt-5.5" }], now),
 		[],
 	);
 });

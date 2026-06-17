@@ -127,7 +127,7 @@ export function selectQuotaForModel(
 			? buildFallbackObservation(ref, adapter, stateObservation, now)
 			: freshHeaderObservation(stateObservation, now);
 	if (!observation) return undefined;
-	const dimension = selectMostConstrainedDimension(observation.dimensions, now);
+	const dimension = selectDimensionForObservation(observation, now);
 	if (!dimension) return undefined;
 	const percent = calculatePercent(dimension.remaining, dimension.limit);
 	if (percent === undefined) return undefined;
@@ -141,12 +141,7 @@ export function selectMostConstrainedDimension(
 	let best: QuotaDimensionObservation | undefined;
 	let bestPercent = Number.POSITIVE_INFINITY;
 	for (const dimension of dimensions) {
-		if (
-			dimension.resetAt !== undefined &&
-			dimension.resetAt <= now &&
-			dimension.source !== "fallback"
-		)
-			continue;
+		if (dimensionExpired(dimension, now)) continue;
 		const percent = calculatePercent(dimension.remaining, dimension.limit);
 		if (percent === undefined) continue;
 		if (percent < bestPercent) {
@@ -155,6 +150,53 @@ export function selectMostConstrainedDimension(
 		}
 	}
 	return best;
+}
+
+function selectDimensionForObservation(
+	observation: QuotaObservation,
+	now: number,
+): QuotaDimensionObservation | undefined {
+	if (observation.source !== "subscription")
+		return selectMostConstrainedDimension(observation.dimensions, now);
+	return selectSubscriptionDimension(observation.dimensions, now);
+}
+
+function selectSubscriptionDimension(
+	dimensions: QuotaDimensionObservation[],
+	now: number,
+): QuotaDimensionObservation | undefined {
+	const mostConstrained = selectMostConstrainedDimension(dimensions, now);
+	if (!mostConstrained) return undefined;
+	const constrainedPercent = calculatePercent(
+		mostConstrained.remaining,
+		mostConstrained.limit,
+	);
+	if (constrainedPercent !== undefined && constrainedPercent <= 0)
+		return mostConstrained;
+	return (
+		selectMostConstrainedDimension(
+			dimensions.filter((dimension) => !isLongSubscriptionWindow(dimension)),
+			now,
+		) ?? mostConstrained
+	);
+}
+
+function isLongSubscriptionWindow(
+	dimension: QuotaDimensionObservation,
+): boolean {
+	const name = dimension.name.toLowerCase().replace(/[-_]+/g, " ");
+	return /\b(week|weekly|month|monthly|year|yearly|annual)\b/.test(name);
+}
+
+function dimensionExpired(
+	dimension: QuotaDimensionObservation,
+	now: number,
+): boolean {
+	return (
+		dimension.resetAt !== undefined &&
+		dimension.resetAt <= now &&
+		dimension.source !== "fallback"
+	);
 }
 
 export function buildQuotaRows(

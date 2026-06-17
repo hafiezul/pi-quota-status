@@ -117,7 +117,7 @@ Generic mappings use named fields only; no user-supplied JavaScript parser funct
 }
 ```
 
-If multiple dimensions are present, the footer uses the most constrained remaining percentage.
+If multiple provider-header dimensions are present, the footer uses the most constrained remaining percentage. For polled subscription quota with both short and weekly windows, the footer prefers the short reset window and only surfaces the weekly window when it is exhausted.
 
 ## Manual fallback
 
