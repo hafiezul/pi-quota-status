@@ -35,6 +35,23 @@ export function formatCountdown(
 	return `${Math.ceil(ms / day)}d`;
 }
 
+export function formatResetTime(
+	resetAt: number | undefined,
+	now = Date.now(),
+): string {
+	if (resetAt === undefined) return "unknown";
+	if (resetAt <= now) return "now";
+	const resetDate = new Date(resetAt);
+	const nowDate = new Date(now);
+	const time = formatClockTime(resetDate);
+	if (sameLocalDate(resetDate, nowDate)) return time;
+	if (sameLocalDate(resetDate, addLocalDays(nowDate, 1)))
+		return `tomorrow ${time}`;
+	if (resetDate.getFullYear() === nowDate.getFullYear())
+		return `${MONTHS[resetDate.getMonth()]} ${resetDate.getDate()} ${time}`;
+	return `${MONTHS[resetDate.getMonth()]} ${resetDate.getDate()}, ${resetDate.getFullYear()} ${time}`;
+}
+
 export function formatFreshness(
 	observedAt: number | undefined,
 	now = Date.now(),
@@ -58,7 +75,48 @@ export function formatFooterText(
 ): string {
 	const percentText = `${label} ${Math.floor(clampPercent(percent))}% left`;
 	if (resetAt === undefined) return percentText;
-	return `${percentText} · reset ${formatCountdown(resetAt, now)}`;
+	return `${percentText} · reset ${formatResetTime(resetAt, now)}`;
+}
+
+const MONTHS = [
+	"Jan",
+	"Feb",
+	"Mar",
+	"Apr",
+	"May",
+	"Jun",
+	"Jul",
+	"Aug",
+	"Sep",
+	"Oct",
+	"Nov",
+	"Dec",
+];
+
+function formatClockTime(date: Date): string {
+	const suffix = date.getHours() >= 12 ? "PM" : "AM";
+	const hour = date.getHours() % 12 || 12;
+	return `${hour}:${String(date.getMinutes()).padStart(2, "0")} ${suffix}`;
+}
+
+function sameLocalDate(a: Date, b: Date): boolean {
+	return (
+		a.getFullYear() === b.getFullYear() &&
+		a.getMonth() === b.getMonth() &&
+		a.getDate() === b.getDate()
+	);
+}
+
+function addLocalDays(date: Date, days: number): Date {
+	return new Date(
+		date.getFullYear(),
+		date.getMonth(),
+		date.getDate() + days,
+		date.getHours(),
+		date.getMinutes(),
+		date.getSeconds(),
+		date.getMilliseconds(),
+	);
 }
 
 function pad(value: string, width: number): string {

@@ -17,6 +17,25 @@ declare function setInterval(
 ): unknown;
 declare function clearInterval(intervalId: unknown): void;
 
+interface AbortSignal {}
+
+declare class AbortController {
+	readonly signal: AbortSignal;
+	abort(): void;
+}
+
+declare function fetch(
+	input: string,
+	init?: {
+		headers?: Record<string, string>;
+		signal?: AbortSignal;
+	},
+): Promise<{
+	ok: boolean;
+	status: number;
+	json(): Promise<unknown>;
+}>;
+
 declare module "node:os" {
 	export function homedir(): string;
 }

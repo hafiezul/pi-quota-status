@@ -18,6 +18,7 @@ export interface PiModelRegistry {
 	getAll?(): PiModel[];
 	find?(provider: string, modelId: string): PiModel | undefined;
 	isUsingOAuth?(model: PiModel): boolean;
+	getApiKeyForProvider?(provider: string): Promise<string | undefined>;
 }
 
 export interface PiContextUsage {

@@ -24,6 +24,7 @@ import {
 	upsertObservation,
 } from "./quota.js";
 import { loadState, mergeStateFile } from "./storage.js";
+import { fetchSubscriptionQuota } from "./subscription.js";
 import type { ModelRef, QuotaState, QuotaStatusConfig } from "./types.js";
 import { modelKey, selectAdapter } from "./match.js";
 
@@ -39,6 +40,7 @@ interface RuntimeState {
 	lastErrors: string[];
 	debug: string[];
 	refreshTimer?: unknown;
+	refreshInFlight: boolean;
 }
 
 export default function quotaStatusExtension(pi: PiExtensionAPI): void {
@@ -48,6 +50,7 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 		state: { version: 1, observations: {} },
 		lastErrors: [],
 		debug: [],
+		refreshInFlight: false,
 	};
 
 	async function reloadFromDisk(): Promise<void> {
@@ -81,6 +84,10 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 			ctx.ui.setStatus(STATUS_KEY, undefined);
 			return;
 		}
+		if (!isUsingSubscription(ctx, ref)) {
+			ctx.ui.setStatus(STATUS_KEY, undefined);
+			return;
+		}
 		const selected = selectQuotaForModel(runtime.state, runtime.config, ref);
 		if (!selected) {
 			ctx.ui.setStatus(STATUS_KEY, formatUnavailableSubscriptionStatus(ctx, ref));
@@ -98,13 +105,55 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 		);
 	}
 
+	async function refreshSubscriptionQuota(ctx: PiContext): Promise<void> {
+		const ref = runtime.activeModel ?? getModelRef(ctx.model);
+		if (!ref || !isUsingSubscription(ctx, ref)) return;
+		if (runtime.refreshInFlight) return;
+		runtime.refreshInFlight = true;
+		const now = Date.now();
+		try {
+			const parsed = await fetchSubscriptionQuota(ctx, ref, now);
+			if (!parsed) return;
+			await mutateState((state) => {
+				const existing = state.observations[modelKey(ref.provider, ref.model)];
+				const observation = observationFromParsed(
+					ref,
+					{ name: "subscription", type: "generic" },
+					parsed,
+					"subscription",
+					200,
+					now,
+					existing,
+				);
+				upsertObservation(state, observation);
+			});
+			recordDebug(
+				`${ref.provider}/${ref.model}: polled ${parsed.dimensions.length} subscription quota dimension(s)`,
+			);
+		} catch (error) {
+			recordDebug(
+				`${ref.provider}/${ref.model}: subscription quota poll failed: ${errorToString(error)}`,
+			);
+		} finally {
+			runtime.refreshInFlight = false;
+		}
+	}
+
+	async function refreshAndUpdateStatus(ctx: PiContext): Promise<void> {
+		await refreshSubscriptionQuota(ctx);
+		updateStatus(ctx);
+	}
+
 	pi.on("session_start", async (_event, ctx) => {
 		await reloadFromDisk();
 		runtime.activeModel = getModelRef(ctx.model);
 		updateStatus(ctx);
+		await refreshAndUpdateStatus(ctx);
 		if (runtime.refreshTimer) clearInterval(runtime.refreshTimer);
 		runtime.refreshTimer = setInterval(
-			() => updateStatus(ctx),
+			() => {
+				void refreshAndUpdateStatus(ctx);
+			},
 			runtime.config.refreshIntervalMs ?? 60_000,
 		);
 	});
@@ -117,7 +166,7 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 
 	pi.on("model_select", async (event: PiModelSelectEvent, ctx) => {
 		runtime.activeModel = getModelRef(event.model);
-		updateStatus(ctx);
+		await refreshAndUpdateStatus(ctx);
 	});
 
 	pi.on(
@@ -125,9 +174,13 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 		async (event: PiAfterProviderResponseEvent, ctx) => {
 			const ref = runtime.activeModel ?? getModelRef(ctx.model);
 			if (!ref) return;
+			if (!isUsingSubscription(ctx, ref)) {
+				ctx.ui.setStatus(STATUS_KEY, undefined);
+				return;
+			}
 			const adapter = selectAdapter(runtime.config, ref.provider, ref.model);
 			if (!adapter) {
-				ctx.ui.setStatus(STATUS_KEY, undefined);
+				updateStatus(ctx);
 				return;
 			}
 			const now = Date.now();
@@ -191,7 +244,7 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 			}
 			if (command === "reload") {
 				await reloadFromDisk();
-				updateStatus(ctx);
+				await refreshAndUpdateStatus(ctx);
 				ctx.ui.notify("pi-quota-status config/state reloaded", "info");
 				return;
 			}
@@ -229,7 +282,13 @@ async function handleConfigCommand(
 
 function buildQuotaTable(runtime: RuntimeState, ctx: PiContext): string {
 	const models = getKnownModels(ctx);
-	const rows = buildQuotaRows(runtime.config, runtime.state, models);
+	const rows = buildQuotaRows(
+		runtime.config,
+		runtime.state,
+		models,
+		Date.now(),
+		(ref) => isUsingSubscription(ctx, ref),
+	);
 	if (rows.length > 0) return formatRowsAsTable(rows);
 	return buildUnavailableQuotaMessage(runtime, ctx);
 }
@@ -363,6 +422,10 @@ function formatTokenCount(value: number): string {
 
 function trimDecimal(value: number): string {
 	return value.toFixed(1).replace(/\.0$/, "");
+}
+
+function errorToString(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }
 
 function sendMessage(pi: PiExtensionAPI, content: string): void {

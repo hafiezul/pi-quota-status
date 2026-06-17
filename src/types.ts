@@ -1,4 +1,4 @@
-export type ObservationSource = "headers" | "429" | "fallback";
+export type ObservationSource = "headers" | "429" | "fallback" | "subscription";
 export type ConsumptionUnit = "turns" | "tokens" | "costUnits";
 
 export type HeaderNames = string | string[];

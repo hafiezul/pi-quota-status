@@ -2,6 +2,7 @@ import type {
 	AdapterConfig,
 	FixedWindowFallbackConfig,
 	ModelRef,
+	ObservationSource,
 	ParsedQuotaObservation,
 	QuotaDimensionObservation,
 	QuotaObservation,
@@ -13,9 +14,9 @@ import type {
 import type { PiModel } from "./pi-types.js";
 import {
 	calculatePercent,
-	formatCountdown,
 	formatFreshness,
 	formatPercent,
+	formatResetTime,
 } from "./format.js";
 import { modelKey, parseModelKey, selectAdapter } from "./match.js";
 
@@ -28,7 +29,7 @@ export function observationFromParsed(
 	ref: ModelRef,
 	adapter: AdapterConfig,
 	parsed: ParsedQuotaObservation,
-	source: "headers" | "429",
+	source: ObservationSource,
 	status: number,
 	now = Date.now(),
 	existing?: QuotaObservation,
@@ -161,17 +162,23 @@ export function buildQuotaRows(
 	state: QuotaState,
 	models: PiModel[] = [],
 	now = Date.now(),
+	includeModel?: (ref: ModelRef) => boolean,
 ): QuotaRow[] {
 	const keys = new Set<string>();
 	for (const key of Object.keys(state.observations)) keys.add(key);
 	for (const model of models) {
-		if (selectAdapter(config, model.provider, model.id))
+		const ref = { provider: model.provider, model: model.id };
+		if (
+			(!includeModel || includeModel(ref)) &&
+			selectAdapter(config, model.provider, model.id)
+		)
 			keys.add(modelKey(model.provider, model.id));
 	}
 	const rows: QuotaRow[] = [];
 	for (const key of [...keys].sort()) {
 		const ref = parseModelKey(key);
 		if (!ref) continue;
+		if (includeModel && !includeModel(ref)) continue;
 		const selected = selectQuotaForModel(state, config, ref, now);
 		if (!selected) continue;
 		rows.push({
@@ -181,7 +188,7 @@ export function buildQuotaRows(
 			reset:
 				selected.dimension.resetAt === undefined
 					? "unknown"
-					: formatCountdown(selected.dimension.resetAt, now),
+					: formatResetTime(selected.dimension.resetAt, now),
 			source: selected.observation.source,
 			dimension: selected.dimension.name,
 			freshness: formatFreshness(selected.dimension.observedAt, now),
