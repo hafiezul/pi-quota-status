@@ -1,6 +1,6 @@
 {
   "name": "pi-quota-status",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Pi extension package that adds compact provider quota/reset status to the footer.",
   "type": "module",
   "license": "MIT",
