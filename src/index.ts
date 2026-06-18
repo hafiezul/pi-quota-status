@@ -41,6 +41,7 @@ interface RuntimeState {
 	debug: string[];
 	refreshTimer?: unknown;
 	refreshInFlight: boolean;
+	sessionGeneration: number;
 }
 
 export default function quotaStatusExtension(pi: PiExtensionAPI): void {
@@ -51,6 +52,7 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 		lastErrors: [],
 		debug: [],
 		refreshInFlight: false,
+		sessionGeneration: 0,
 	};
 
 	async function reloadFromDisk(): Promise<void> {
@@ -108,15 +110,43 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 		);
 	}
 
-	async function refreshSubscriptionQuota(ctx: PiContext): Promise<void> {
-		const ref = runtime.activeModel ?? getModelRef(ctx.model);
-		if (!ref || !isUsingSubscription(ctx, ref)) return;
+	function isCurrentSession(generation: number): boolean {
+		return runtime.sessionGeneration === generation;
+	}
+
+	function safeUpdateStatus(ctx: PiContext, generation: number): void {
+		if (!isCurrentSession(generation)) return;
+		try {
+			updateStatus(ctx);
+		} catch (error) {
+			if (isStaleContextError(error) || !isCurrentSession(generation)) return;
+			recordDebug(`status update failed: ${errorToString(error)}`);
+		}
+	}
+
+	async function refreshSubscriptionQuota(
+		ctx: PiContext,
+		generation: number,
+	): Promise<void> {
+		if (!isCurrentSession(generation)) return;
+		let ref: ModelRef;
+		try {
+			const candidate = runtime.activeModel ?? getModelRef(ctx.model);
+			if (!candidate || !isUsingSubscription(ctx, candidate)) return;
+			ref = candidate;
+		} catch (error) {
+			if (isStaleContextError(error) || !isCurrentSession(generation)) return;
+			recordDebug(
+				`subscription quota preflight failed: ${errorToString(error)}`,
+			);
+			return;
+		}
 		if (runtime.refreshInFlight) return;
 		runtime.refreshInFlight = true;
 		const now = Date.now();
 		try {
 			const parsed = await fetchSubscriptionQuota(ctx, ref, now);
-			if (!parsed) return;
+			if (!isCurrentSession(generation) || !parsed) return;
 			await mutateState((state) => {
 				const existing = state.observations[modelKey(ref.provider, ref.model)];
 				const observation = observationFromParsed(
@@ -130,10 +160,12 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 				);
 				upsertObservation(state, observation);
 			});
+			if (!isCurrentSession(generation)) return;
 			recordDebug(
 				`${ref.provider}/${ref.model}: polled ${parsed.dimensions.length} subscription quota dimension(s)`,
 			);
 		} catch (error) {
+			if (isStaleContextError(error) || !isCurrentSession(generation)) return;
 			recordDebug(
 				`${ref.provider}/${ref.model}: subscription quota poll failed: ${errorToString(error)}`,
 			);
@@ -142,45 +174,80 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 		}
 	}
 
-	async function refreshAndUpdateStatus(ctx: PiContext): Promise<void> {
-		await refreshSubscriptionQuota(ctx);
-		updateStatus(ctx);
+	async function refreshAndUpdateStatus(
+		ctx: PiContext,
+		generation: number,
+	): Promise<void> {
+		if (!isCurrentSession(generation)) return;
+		await refreshSubscriptionQuota(ctx, generation);
+		safeUpdateStatus(ctx, generation);
+	}
+
+	function refreshAndUpdateStatusInBackground(
+		ctx: PiContext,
+		generation: number,
+	): void {
+		void refreshAndUpdateStatus(ctx, generation).catch((error: unknown) => {
+			if (isStaleContextError(error) || !isCurrentSession(generation)) return;
+			recordDebug(`background refresh failed: ${errorToString(error)}`);
+		});
 	}
 
 	pi.on("session_start", async (_event, ctx) => {
-		await reloadFromDisk();
-		runtime.activeModel = getModelRef(ctx.model);
-		updateStatus(ctx);
-		await refreshAndUpdateStatus(ctx);
+		const generation = ++runtime.sessionGeneration;
 		if (runtime.refreshTimer) clearInterval(runtime.refreshTimer);
+		runtime.refreshTimer = undefined;
+		await reloadFromDisk();
+		if (!isCurrentSession(generation)) return;
+		runtime.activeModel = getModelRef(ctx.model);
+		safeUpdateStatus(ctx, generation);
+		await refreshAndUpdateStatus(ctx, generation);
+		if (!isCurrentSession(generation)) return;
 		runtime.refreshTimer = setInterval(() => {
-			void refreshAndUpdateStatus(ctx);
+			refreshAndUpdateStatusInBackground(ctx, generation);
 		}, runtime.config.refreshIntervalMs ?? 60_000);
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
+		runtime.sessionGeneration++;
 		if (runtime.refreshTimer) clearInterval(runtime.refreshTimer);
 		runtime.refreshTimer = undefined;
-		ctx.ui.setStatus(STATUS_KEY, undefined);
+		try {
+			ctx.ui.setStatus(STATUS_KEY, undefined);
+		} catch (error) {
+			if (!isStaleContextError(error)) throw error;
+		}
 	});
 
 	pi.on("model_select", async (event: PiModelSelectEvent, ctx) => {
+		const generation = runtime.sessionGeneration;
 		runtime.activeModel = getModelRef(event.model);
-		await refreshAndUpdateStatus(ctx);
+		await refreshAndUpdateStatus(ctx, generation);
 	});
 
 	pi.on(
 		"after_provider_response",
 		async (event: PiAfterProviderResponseEvent, ctx) => {
-			const ref = runtime.activeModel ?? getModelRef(ctx.model);
-			if (!ref) return;
-			if (!isUsingSubscription(ctx, ref)) {
-				ctx.ui.setStatus(STATUS_KEY, undefined);
+			const generation = runtime.sessionGeneration;
+			let ref: ModelRef;
+			try {
+				const candidate = runtime.activeModel ?? getModelRef(ctx.model);
+				if (!candidate) return;
+				ref = candidate;
+				if (!isUsingSubscription(ctx, ref)) {
+					safeUpdateStatus(ctx, generation);
+					return;
+				}
+			} catch (error) {
+				if (isStaleContextError(error) || !isCurrentSession(generation)) return;
+				recordDebug(
+					`provider response preflight failed: ${errorToString(error)}`,
+				);
 				return;
 			}
 			const adapter = selectAdapter(runtime.config, ref.provider, ref.model);
 			if (!adapter) {
-				updateStatus(ctx);
+				safeUpdateStatus(ctx, generation);
 				return;
 			}
 			const now = Date.now();
@@ -225,7 +292,8 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 					`${ref.provider}/${ref.model}: no quota data for status ${event.status}`,
 				);
 			}
-			updateStatus(ctx);
+			if (!isCurrentSession(generation)) return;
+			safeUpdateStatus(ctx, generation);
 		},
 	);
 
@@ -243,8 +311,9 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 				return;
 			}
 			if (command === "reload") {
+				const generation = runtime.sessionGeneration;
 				await reloadFromDisk();
-				await refreshAndUpdateStatus(ctx);
+				await refreshAndUpdateStatus(ctx, generation);
 				ctx.ui.notify("pi-quota-status config/state reloaded", "info");
 				return;
 			}
@@ -435,6 +504,12 @@ function formatTokenCount(value: number): string {
 
 function trimDecimal(value: number): string {
 	return value.toFixed(1).replace(/\.0$/, "");
+}
+
+function isStaleContextError(error: unknown): boolean {
+	return (
+		error instanceof Error && error.message.includes("extension ctx is stale")
+	);
 }
 
 function errorToString(error: unknown): string {
