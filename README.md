@@ -6,7 +6,7 @@
 `pi-quota-status` is a Pi extension package that adds a compact subscription quota/reset indicator beside Pi's default footer statusline.
 
 ```text
-quota 72% left · reset 4:20 PM
+5h 78% 1:57PM · Wk 30% 8:57AM (28/06)
 ```
 
 It uses its own `ctx.ui.setStatus("pi-quota-status", ...)` slot, so Pi's default footer stays intact.
@@ -17,8 +17,8 @@ The extension is intentionally scoped to `/login` subscription models. If the ac
 
 Current support is split by how quota data is exposed:
 
-- Anthropic `/login` models (`anthropic/claude-*`) — parsed from Anthropic rate-limit headers when Pi exposes them to extensions. You can also enable a manual fixed-window fallback in config.
-- OpenAI Codex `/login` models (`openai-codex/*`) — polled from the ChatGPT Codex usage endpoint with Pi's OAuth token. This produces rows such as `openai-codex/gpt-5.5` with `5h` and `weekly` dimensions.
+- Anthropic `/login` models (`anthropic/claude-*`) — polled from Anthropic's OAuth usage endpoint for subscription windows when Pi exposes the OAuth token, with response-header parsing and optional manual fixed-window fallback as secondary sources.
+- OpenAI Codex `/login` models (`openai-codex/*`) — polled from the ChatGPT Codex usage endpoint with Pi's OAuth token. This produces compact status segments such as `5h` and `Wk`.
 - Generic OpenAI-compatible headers — optional named header mappings for OpenAI-compatible providers or proxies. This is header-based and separate from the OpenAI Codex subscription poll.
 
 The extension only displays quota for models Pi reports as using `/login` OAuth. If the same provider/model is configured with an API key, it is ignored.
@@ -81,7 +81,7 @@ State writes use a small lock plus atomic rename so concurrent Pi sessions merge
 
 ## Config schema
 
-If `config.json` is absent, the extension uses built-in defaults at runtime. Running `/quota config` creates an editable template file with both an enabled Anthropic adapter and an enabled generic OpenAI header adapter. OpenAI Codex subscription polling does not require a config adapter entry; it runs whenever the active `openai-codex/*` model is using `/login` OAuth and Pi can provide the OAuth token.
+If `config.json` is absent, the extension uses built-in defaults at runtime. Running `/quota config` creates an editable template file with both an enabled Anthropic adapter and an enabled generic OpenAI header adapter. Anthropic and OpenAI Codex subscription polling do not require config adapter entries; they run whenever the active supported provider/model is using `/login` OAuth and Pi can provide the OAuth token.
 
 Top-level fields:
 
@@ -167,7 +167,7 @@ Header parsing ships with:
 - `anthropic` — parses common Anthropic rate-limit headers such as request/token/message dimensions.
 - `generic` — parses named header mappings for OpenAI-compatible or proxy headers. The default OpenAI entry is a generic adapter scoped to `provider: "openai*"`.
 
-These adapters parse provider response headers only. The OpenAI Codex `/login` quota support is handled by subscription polling, not by the generic OpenAI header adapter.
+These adapters parse provider response headers only. Anthropic and OpenAI Codex `/login` quota windows are handled by subscription polling, not by the generic OpenAI header adapter.
 
 Adapters are evaluated only after Pi reports that the active model uses OAuth subscription auth from `/login`. API-key and custom-key providers are ignored even if their headers match an adapter.
 
@@ -198,7 +198,7 @@ Generic mappings use named fields only; no user-supplied JavaScript parser funct
 }
 ```
 
-If multiple provider-header dimensions are present, the footer uses the most constrained remaining percentage. For polled subscription quota with both short and weekly windows, the footer prefers the short reset window and only surfaces the weekly window when it is exhausted.
+If multiple provider-header dimensions are present, the compact footer uses the most constrained remaining percentage as a single segment. For polled Anthropic and OpenAI Codex subscription quota, the footer shows short and weekly windows together, such as `5h 78% 1:57PM · Wk 30% 8:57AM (28/06)`.
 
 ## Manual fallback
 
@@ -222,20 +222,21 @@ After the reset time passes, fallback observations recompute the next fixed wind
 
 On session start, model selection, `/quota reload`, and every `refreshIntervalMs`, the extension polls known subscription quota sources when Pi can provide an OAuth access token.
 
-Currently supported poll source:
+Currently supported poll sources:
 
+- `anthropic` — polls Anthropic's OAuth usage endpoint and maps `five_hour`, `seven_day`, and active-model weekly buckets into quota dimensions. The footer shows `5h` plus the stricter relevant weekly bucket (`Wk`, `Son`, or `Opus`).
 - `openai-codex` — polls the ChatGPT Codex usage endpoint and maps its 5h and weekly windows into quota dimensions.
 
-This poll is conditional on the model being authenticated through `/login`; the config template is not personalized based on which user is logged in. Provider response headers and fallback observations remain supported for other `/login` subscription providers.
+Polling is conditional on the model being authenticated through `/login`; the config template is not personalized based on which user is logged in. Provider response headers and fallback observations remain supported for other `/login` subscription providers.
 
 ## UI behavior
 
 - Footer status shows only the active model.
 - API-key, environment-key, runtime-key, and custom-key providers are hidden.
 - Subscription models with no quota data show `quota n/a (sub)` plus context usage when available.
-- Colors are used only below thresholds: warning below 25%, critical below 10% by default.
+- Colors are used only below thresholds: warning below 25%, critical below 10% by default. Multi-window status uses the lowest displayed remaining percentage.
 - Quota polling and countdown refresh run once per minute by default.
-- On HTTP 429 with retry/reset data, the footer shows `quota 0% left · reset ...`.
+- On HTTP 429 with retry/reset data, the footer shows a compact zero-remaining segment such as `Req 0% 1:57PM`.
 
 ## Privacy notes
 

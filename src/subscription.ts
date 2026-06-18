@@ -1,35 +1,74 @@
 import type { PiContext } from "./pi-types.js";
-import type { ModelRef, ParsedQuotaDimension, ParsedQuotaObservation } from "./types.js";
+import type {
+	ModelRef,
+	ParsedQuotaDimension,
+	ParsedQuotaObservation,
+} from "./types.js";
 
 const REQUEST_TIMEOUT_MS = 10_000;
 const OPENAI_CODEX_PROVIDER = "openai-codex";
+const ANTHROPIC_PROVIDER = "anthropic";
 const OPENAI_CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
+const ANTHROPIC_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
+const ANTHROPIC_OAUTH_BETA = "oauth-2025-04-20";
 
 export async function fetchSubscriptionQuota(
 	ctx: PiContext,
 	ref: ModelRef,
 	now = Date.now(),
 ): Promise<ParsedQuotaObservation | undefined> {
-	if (ref.provider !== OPENAI_CODEX_PROVIDER) return undefined;
+	if (
+		ref.provider !== OPENAI_CODEX_PROVIDER &&
+		ref.provider !== ANTHROPIC_PROVIDER
+	)
+		return undefined;
 	const token = await ctx.modelRegistry.getApiKeyForProvider?.(ref.provider);
 	if (!token) return undefined;
-	return fetchOpenAICodexQuota(token, now);
+	if (ref.provider === OPENAI_CODEX_PROVIDER)
+		return fetchOpenAICodexQuota(token, now);
+	return fetchAnthropicQuota(token, now);
 }
 
 export async function fetchOpenAICodexQuota(
 	token: string,
 	now = Date.now(),
 ): Promise<ParsedQuotaObservation | undefined> {
+	return fetchQuotaJson(
+		OPENAI_CODEX_USAGE_URL,
+		{ authorization: `Bearer ${token}` },
+		"OpenAI Codex",
+		(value) => parseOpenAICodexUsage(value, now),
+	);
+}
+
+export async function fetchAnthropicQuota(
+	token: string,
+	now = Date.now(),
+): Promise<ParsedQuotaObservation | undefined> {
+	return fetchQuotaJson(
+		ANTHROPIC_USAGE_URL,
+		{
+			authorization: `Bearer ${token}`,
+			"anthropic-beta": ANTHROPIC_OAUTH_BETA,
+		},
+		"Anthropic",
+		(value) => parseAnthropicUsage(value, now),
+	);
+}
+
+async function fetchQuotaJson(
+	url: string,
+	headers: Record<string, string>,
+	label: string,
+	parse: (value: unknown) => ParsedQuotaObservation | undefined,
+): Promise<ParsedQuotaObservation | undefined> {
 	const controller = new AbortController();
 	const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 	try {
-		const response = await fetch(OPENAI_CODEX_USAGE_URL, {
-			headers: { authorization: `Bearer ${token}` },
-			signal: controller.signal,
-		});
+		const response = await fetch(url, { headers, signal: controller.signal });
 		if (!response.ok)
-			throw new Error(`OpenAI Codex quota request failed: ${response.status}`);
-		return parseOpenAICodexUsage(await response.json(), now);
+			throw new Error(`${label} quota request failed: ${response.status}`);
+		return parse(await response.json());
 	} finally {
 		clearTimeout(timeout);
 	}
@@ -54,6 +93,27 @@ export function parseOpenAICodexUsage(
 			now,
 		),
 		...parseAdditionalRateLimits(root, now),
+	].filter((dimension): dimension is ParsedQuotaDimension =>
+		Boolean(dimension),
+	);
+	if (dimensions.length === 0) return undefined;
+	return { dimensions };
+}
+
+export function parseAnthropicUsage(
+	value: unknown,
+	now = Date.now(),
+): ParsedQuotaObservation | undefined {
+	const root = asRecord(value);
+	const dimensions = [
+		parseAnthropicWindow("5h", asRecord(root?.five_hour), now),
+		parseAnthropicWindow("weekly", asRecord(root?.seven_day), now),
+		parseAnthropicWindow(
+			"weekly_sonnet",
+			asRecord(root?.seven_day_sonnet),
+			now,
+		),
+		parseAnthropicWindow("weekly_opus", asRecord(root?.seven_day_opus), now),
 	].filter((dimension): dimension is ParsedQuotaDimension =>
 		Boolean(dimension),
 	);
@@ -93,8 +153,29 @@ function parseCodexWindow(
 	now: number,
 ): ParsedQuotaDimension | undefined {
 	if (!window) return undefined;
-	const usedPercent = numberValue(
+	const usedPercent = normalizedUsedPercent(
 		window.used_percent ?? window.usedPercent ?? window.used,
+	);
+	if (usedPercent === undefined) return undefined;
+	return {
+		name,
+		limit: 100,
+		remaining: clampPercent(100 - usedPercent),
+		resetAt: parseResetAt(window, now),
+	};
+}
+
+function parseAnthropicWindow(
+	name: string,
+	window: Record<string, unknown> | undefined,
+	now: number,
+): ParsedQuotaDimension | undefined {
+	if (!window) return undefined;
+	const usedPercent = normalizedUsedPercent(
+		window.utilization ??
+			window.used_percent ??
+			window.usedPercent ??
+			window.used,
 	);
 	if (usedPercent === undefined) return undefined;
 	return {
@@ -109,11 +190,10 @@ function parseResetAt(
 	window: Record<string, unknown>,
 	now: number,
 ): number | undefined {
-	const resetAt = numberValue(
+	const resetAt = timestampValue(
 		window.reset_at ?? window.resetAt ?? window.resets_at ?? window.resetsAt,
 	);
-	if (resetAt !== undefined)
-		return resetAt > 1_000_000_000_000 ? resetAt : resetAt * 1000;
+	if (resetAt !== undefined) return resetAt;
 	const resetAfter = numberValue(
 		window.reset_after_seconds ??
 			window.resetAfterSeconds ??
@@ -134,6 +214,21 @@ function numberValue(value: unknown): number | undefined {
 	if (typeof value !== "string" || !value.trim()) return undefined;
 	const parsed = Number(value);
 	return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function normalizedUsedPercent(value: unknown): number | undefined {
+	const parsed = numberValue(value);
+	if (parsed === undefined) return undefined;
+	return parsed >= 0 && parsed <= 1 ? parsed * 100 : parsed;
+}
+
+function timestampValue(value: unknown): number | undefined {
+	const numeric = numberValue(value);
+	if (numeric !== undefined)
+		return numeric > 1_000_000_000_000 ? numeric : numeric * 1000;
+	if (typeof value !== "string" || !value.trim()) return undefined;
+	const parsedDate = Date.parse(value);
+	return Number.isFinite(parsedDate) ? parsedDate : undefined;
 }
 
 function stringValue(value: unknown): string | undefined {

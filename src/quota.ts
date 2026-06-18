@@ -1,6 +1,8 @@
 import type {
 	AdapterConfig,
 	FixedWindowFallbackConfig,
+	FooterQuotaSelection,
+	FooterQuotaSegment,
 	ModelRef,
 	ObservationSource,
 	ParsedQuotaObservation,
@@ -119,19 +121,47 @@ export function selectQuotaForModel(
 	ref: ModelRef,
 	now = Date.now(),
 ): SelectedQuota | undefined {
-	const key = modelKey(ref.provider, ref.model);
-	const stateObservation = state.observations[key];
-	const adapter = selectAdapter(config, ref.provider, ref.model);
-	const observation =
-		stateObservation?.source === "fallback"
-			? buildFallbackObservation(ref, adapter, stateObservation, now)
-			: freshHeaderObservation(stateObservation, now);
+	const observation = selectableObservationForModel(state, config, ref, now);
 	if (!observation) return undefined;
 	const dimension = selectDimensionForObservation(observation, now);
 	if (!dimension) return undefined;
 	const percent = calculatePercent(dimension.remaining, dimension.limit);
 	if (percent === undefined) return undefined;
 	return { observation, dimension, percentRemaining: percent };
+}
+
+export function selectFooterQuotaForModel(
+	state: QuotaState,
+	config: QuotaStatusConfig,
+	ref: ModelRef,
+	now = Date.now(),
+): FooterQuotaSelection | undefined {
+	const observation = selectableObservationForModel(state, config, ref, now);
+	if (!observation) return undefined;
+	const dimensions = selectFooterDimensionsForObservation(
+		observation,
+		ref,
+		now,
+	);
+	const segments = dimensions
+		.map((dimension): FooterQuotaSegment | undefined => {
+			const percentRemaining = calculatePercent(
+				dimension.remaining,
+				dimension.limit,
+			);
+			return percentRemaining === undefined
+				? undefined
+				: { dimension, percentRemaining };
+		})
+		.filter((segment): segment is FooterQuotaSegment => Boolean(segment));
+	if (segments.length === 0) return undefined;
+	return {
+		observation,
+		segments,
+		percentRemaining: Math.min(
+			...segments.map((segment) => segment.percentRemaining),
+		),
+	};
 }
 
 export function selectMostConstrainedDimension(
@@ -161,6 +191,41 @@ function selectDimensionForObservation(
 	return selectSubscriptionDimension(observation.dimensions, now);
 }
 
+function selectFooterDimensionsForObservation(
+	observation: QuotaObservation,
+	ref: ModelRef,
+	now: number,
+): QuotaDimensionObservation[] {
+	if (observation.source !== "subscription") {
+		const selected = selectMostConstrainedDimension(
+			observation.dimensions,
+			now,
+		);
+		return selected ? [selected] : [];
+	}
+	if (ref.provider === "openai-codex")
+		return compactDimensionsByName(
+			observation.dimensions,
+			["5h", "weekly"],
+			now,
+		);
+	if (ref.provider === "anthropic") {
+		const shortWindow = findDimensionByNames(
+			observation.dimensions,
+			["5h"],
+			now,
+		);
+		const weekly = selectAnthropicWeeklyDimension(
+			observation.dimensions,
+			ref.model,
+			now,
+		);
+		return uniqueDimensions([shortWindow, weekly]);
+	}
+	const selected = selectSubscriptionDimension(observation.dimensions, now);
+	return selected ? [selected] : [];
+}
+
 function selectSubscriptionDimension(
 	dimensions: QuotaDimensionObservation[],
 	now: number,
@@ -184,8 +249,82 @@ function selectSubscriptionDimension(
 function isLongSubscriptionWindow(
 	dimension: QuotaDimensionObservation,
 ): boolean {
-	const name = dimension.name.toLowerCase().replace(/[-_]+/g, " ");
-	return /\b(week|weekly|month|monthly|year|yearly|annual)\b/.test(name);
+	const name = normalizedDimensionName(dimension.name);
+	return /\b(week|weekly|month|monthly|year|yearly|annual|seven day)\b/.test(
+		name,
+	);
+}
+
+function compactDimensionsByName(
+	dimensions: QuotaDimensionObservation[],
+	names: string[],
+	now: number,
+): QuotaDimensionObservation[] {
+	return names
+		.map((name) => findDimensionByNames(dimensions, [name], now))
+		.filter((dimension): dimension is QuotaDimensionObservation =>
+			Boolean(dimension),
+		);
+}
+
+function selectAnthropicWeeklyDimension(
+	dimensions: QuotaDimensionObservation[],
+	model: string,
+	now: number,
+): QuotaDimensionObservation | undefined {
+	const candidates = [
+		findDimensionByNames(dimensions, ["weekly", "seven_day"], now),
+		...anthropicModelWeeklyNames(model).map((name) =>
+			findDimensionByNames(dimensions, [name], now),
+		),
+	].filter((dimension): dimension is QuotaDimensionObservation =>
+		Boolean(dimension),
+	);
+	if (candidates.length > 0)
+		return selectMostConstrainedDimension(candidates, now);
+	return selectMostConstrainedDimension(
+		dimensions.filter((dimension) => isLongSubscriptionWindow(dimension)),
+		now,
+	);
+}
+
+function anthropicModelWeeklyNames(model: string): string[] {
+	const normalized = model.toLowerCase();
+	if (normalized.includes("opus")) return ["weekly_opus", "seven_day_opus"];
+	if (normalized.includes("sonnet"))
+		return ["weekly_sonnet", "seven_day_sonnet"];
+	return [];
+}
+
+function findDimensionByNames(
+	dimensions: QuotaDimensionObservation[],
+	names: string[],
+	now: number,
+): QuotaDimensionObservation | undefined {
+	const normalizedNames = new Set(names.map(normalizedDimensionName));
+	return dimensions.find(
+		(dimension) =>
+			normalizedNames.has(normalizedDimensionName(dimension.name)) &&
+			!dimensionExpired(dimension, now) &&
+			calculatePercent(dimension.remaining, dimension.limit) !== undefined,
+	);
+}
+
+function uniqueDimensions(
+	dimensions: Array<QuotaDimensionObservation | undefined>,
+): QuotaDimensionObservation[] {
+	const seen = new Set<QuotaDimensionObservation>();
+	const result: QuotaDimensionObservation[] = [];
+	for (const dimension of dimensions) {
+		if (!dimension || seen.has(dimension)) continue;
+		seen.add(dimension);
+		result.push(dimension);
+	}
+	return result;
+}
+
+function normalizedDimensionName(name: string): string {
+	return name.toLowerCase().replace(/[-_]+/g, " ").trim();
 }
 
 function dimensionExpired(
@@ -237,6 +376,20 @@ export function buildQuotaRows(
 		});
 	}
 	return rows;
+}
+
+function selectableObservationForModel(
+	state: QuotaState,
+	config: QuotaStatusConfig,
+	ref: ModelRef,
+	now: number,
+): QuotaObservation | undefined {
+	const key = modelKey(ref.provider, ref.model);
+	const stateObservation = state.observations[key];
+	const adapter = selectAdapter(config, ref.provider, ref.model);
+	return stateObservation?.source === "fallback"
+		? buildFallbackObservation(ref, adapter, stateObservation, now)
+		: freshHeaderObservation(stateObservation, now);
 }
 
 function freshHeaderObservation(

@@ -5,7 +5,7 @@ import {
 	ensureConfigTemplate,
 	loadConfig,
 } from "./config.js";
-import { formatFooterText, formatRowsAsTable } from "./format.js";
+import { formatCompactFooterText, formatRowsAsTable } from "./format.js";
 import { getQuotaStatusPaths, type QuotaStatusPaths } from "./paths.js";
 import type {
 	PiAfterProviderResponseEvent,
@@ -20,7 +20,7 @@ import {
 	consumeFallbackQuota,
 	getModelRef,
 	observationFromParsed,
-	selectQuotaForModel,
+	selectFooterQuotaForModel,
 	upsertObservation,
 } from "./quota.js";
 import { loadState, mergeStateFile } from "./storage.js";
@@ -90,7 +90,11 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 			ctx.ui.setStatus(STATUS_KEY, undefined);
 			return;
 		}
-		const selected = selectQuotaForModel(runtime.state, runtime.config, ref);
+		const selected = selectFooterQuotaForModel(
+			runtime.state,
+			runtime.config,
+			ref,
+		);
 		if (!selected) {
 			ctx.ui.setStatus(
 				STATUS_KEY,
@@ -98,12 +102,7 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 			);
 			return;
 		}
-		const text = formatFooterText(
-			selected.percentRemaining,
-			selected.dimension.resetAt,
-			Date.now(),
-			selected.observation.source === "fallback" ? "quota est" : "quota",
-		);
+		const text = formatCompactFooterText(selected.segments, Date.now());
 		ctx.ui.setStatus(
 			STATUS_KEY,
 			colorByThreshold(ctx, runtime.config, text, selected.percentRemaining),
@@ -261,6 +260,16 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 				await mutateState((state) => {
 					const existing =
 						state.observations[modelKey(ref.provider, ref.model)];
+					const hasFreshSubscription = existing?.dimensions.some(
+						(dimension) =>
+							dimension.resetAt === undefined || dimension.resetAt > now,
+					);
+					if (
+						existing?.source === "subscription" &&
+						ref.provider === "anthropic" &&
+						hasFreshSubscription
+					)
+						return;
 					const observation = observationFromParsed(
 						ref,
 						adapter,

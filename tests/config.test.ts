@@ -13,6 +13,7 @@ import {
 	observationFromParsed,
 	consumeFallbackQuota,
 	ensureFallbackObservation,
+	selectFooterQuotaForModel,
 	selectQuotaForModel,
 	upsertObservation,
 } from "../src/quota.js";
@@ -179,6 +180,86 @@ test("subscription quota prefers the short reset window over weekly", () => {
 	const selected = selectQuotaForModel(state, config, ref, now);
 	assert.equal(selected?.dimension.name, "5h");
 	assert.equal(selected?.percentRemaining, 97);
+});
+
+test("footer shows OpenAI Codex short and weekly windows", () => {
+	const config: QuotaStatusConfig = normalizeConfig({
+		adapters: [{ name: "generic", provider: "openai-codex", models: ["*"] }],
+	});
+	const state: QuotaState = { version: 1, observations: {} };
+	const ref = { provider: "openai-codex", model: "gpt-5.5" };
+	upsertObservation(
+		state,
+		observationFromParsed(
+			ref,
+			{ name: "subscription" },
+			{
+				dimensions: [
+					{
+						name: "5h",
+						limit: 100,
+						remaining: 97,
+						resetAt: now + 5 * 60 * 60 * 1000,
+					},
+					{
+						name: "weekly",
+						limit: 100,
+						remaining: 49,
+						resetAt: now + 5 * 24 * 60 * 60 * 1000,
+					},
+					{
+						name: "extra-1",
+						limit: 100,
+						remaining: 1,
+						resetAt: now + 60 * 60 * 1000,
+					},
+				],
+			},
+			"subscription",
+			200,
+			now,
+		),
+	);
+	const selected = selectFooterQuotaForModel(state, config, ref, now);
+	assert.deepEqual(
+		selected?.segments.map((segment) => segment.dimension.name),
+		["5h", "weekly"],
+	);
+	assert.equal(selected?.percentRemaining, 49);
+});
+
+test("footer shows Anthropic short window and active model weekly bottleneck", () => {
+	const config: QuotaStatusConfig = normalizeConfig({
+		adapters: [
+			{ name: "anthropic", provider: "anthropic", models: ["claude-*"] },
+		],
+	});
+	const state: QuotaState = { version: 1, observations: {} };
+	const ref = { provider: "anthropic", model: "claude-sonnet-4" };
+	upsertObservation(
+		state,
+		observationFromParsed(
+			ref,
+			{ name: "subscription" },
+			{
+				dimensions: [
+					{ name: "5h", limit: 100, remaining: 82 },
+					{ name: "weekly", limit: 100, remaining: 60 },
+					{ name: "weekly_sonnet", limit: 100, remaining: 25 },
+					{ name: "weekly_opus", limit: 100, remaining: 4 },
+				],
+			},
+			"subscription",
+			200,
+			now,
+		),
+	);
+	const selected = selectFooterQuotaForModel(state, config, ref, now);
+	assert.deepEqual(
+		selected?.segments.map((segment) => segment.dimension.name),
+		["5h", "weekly_sonnet"],
+	);
+	assert.equal(selected?.percentRemaining, 25);
 });
 
 test("subscription quota still surfaces an exhausted weekly window", () => {

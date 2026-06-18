@@ -1,4 +1,4 @@
-import type { QuotaRow } from "./types.js";
+import type { FooterQuotaSegment, QuotaRow } from "./types.js";
 
 export function clampPercent(value: number): number {
 	if (!Number.isFinite(value)) return 0;
@@ -78,6 +78,78 @@ export function formatFooterText(
 	return `${percentText} · reset ${formatResetTime(resetAt, now)}`;
 }
 
+export function formatCompactFooterText(
+	segments: FooterQuotaSegment[],
+	now = Date.now(),
+): string {
+	return segments
+		.map((segment) => formatCompactQuotaSegment(segment, now))
+		.join(" · ");
+}
+
+export function formatCompactQuotaSegment(
+	segment: FooterQuotaSegment,
+	now = Date.now(),
+): string {
+	const parts = [
+		formatCompactDimensionLabel(segment.dimension.name),
+		`${Math.floor(clampPercent(segment.percentRemaining))}%`,
+	];
+	if (segment.dimension.resetAt !== undefined)
+		parts.push(formatCompactResetTime(segment.dimension.resetAt, now));
+	return parts.join(" ");
+}
+
+export function formatCompactResetTime(
+	resetAt: number | undefined,
+	now = Date.now(),
+): string {
+	if (resetAt === undefined) return "unknown";
+	if (resetAt <= now) return "now";
+	const resetDate = new Date(resetAt);
+	const nowDate = new Date(now);
+	const time = formatCompactClockTime(resetDate);
+	if (sameLocalDate(resetDate, nowDate)) return time;
+	if (sameLocalDate(resetDate, addLocalDays(nowDate, 1)))
+		return `${time} (tom)`;
+	const day = String(resetDate.getDate()).padStart(2, "0");
+	const month = String(resetDate.getMonth() + 1).padStart(2, "0");
+	if (resetDate.getFullYear() === nowDate.getFullYear())
+		return `${time} (${day}/${month})`;
+	return `${time} (${day}/${month}/${String(resetDate.getFullYear()).slice(-2)})`;
+}
+
+export function formatCompactDimensionLabel(name: string): string {
+	const normalized = name.toLowerCase().replace(/[-_]+/g, " ").trim();
+	switch (normalized) {
+		case "5h":
+		case "five hour":
+			return "5h";
+		case "weekly":
+		case "week":
+		case "seven day":
+			return "Wk";
+		case "weekly sonnet":
+		case "seven day sonnet":
+			return "Son";
+		case "weekly opus":
+		case "seven day opus":
+			return "Opus";
+		case "requests":
+			return "Req";
+		case "tokens":
+			return "Tok";
+		case "input tokens":
+			return "In";
+		case "output tokens":
+			return "Out";
+		case "messages":
+			return "Msg";
+		default:
+			return compactFallbackLabel(name);
+	}
+}
+
 const MONTHS = [
 	"Jan",
 	"Feb",
@@ -97,6 +169,21 @@ function formatClockTime(date: Date): string {
 	const suffix = date.getHours() >= 12 ? "PM" : "AM";
 	const hour = date.getHours() % 12 || 12;
 	return `${hour}:${String(date.getMinutes()).padStart(2, "0")} ${suffix}`;
+}
+
+function formatCompactClockTime(date: Date): string {
+	const suffix = date.getHours() >= 12 ? "PM" : "AM";
+	const hour = date.getHours() % 12 || 12;
+	return `${hour}:${String(date.getMinutes()).padStart(2, "0")}${suffix}`;
+}
+
+function compactFallbackLabel(name: string): string {
+	const label = name
+		.split(/[-_\s]+/)
+		.filter(Boolean)
+		.map((part) => part[0]?.toUpperCase() ?? "")
+		.join("");
+	return label || "Quota";
 }
 
 function sameLocalDate(a: Date, b: Date): boolean {

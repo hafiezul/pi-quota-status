@@ -94,6 +94,17 @@ export interface SelectedQuota {
 	percentRemaining: number;
 }
 
+export interface FooterQuotaSegment {
+	dimension: QuotaDimensionObservation;
+	percentRemaining: number;
+}
+
+export interface FooterQuotaSelection {
+	observation: QuotaObservation;
+	segments: FooterQuotaSegment[];
+	percentRemaining: number;
+}
+
 export interface QuotaRow {
 	provider: string;
 	model: string;

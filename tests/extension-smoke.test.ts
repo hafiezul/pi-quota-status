@@ -10,6 +10,7 @@ import type {
 } from "../src/pi-types.js";
 import {
 	fetchSubscriptionQuota,
+	parseAnthropicUsage,
 	parseOpenAICodexUsage,
 } from "../src/subscription.js";
 
@@ -202,6 +203,33 @@ test("OpenAI Codex subscription usage parses quota windows", () => {
 	assert.equal(parsed?.dimensions[1]?.remaining, 35);
 });
 
+test("Anthropic subscription usage parses quota windows", () => {
+	const parsed = parseAnthropicUsage(
+		{
+			five_hour: {
+				utilization: 22,
+				resets_at: "2026-01-01T05:00:00Z",
+			},
+			seven_day: {
+				utilization: 60,
+				resets_at: "2026-01-05T08:00:00Z",
+			},
+			seven_day_sonnet: {
+				utilization: 0.8,
+				resets_at: "2026-01-04T08:00:00Z",
+			},
+		},
+		Date.UTC(2026, 0, 1, 0, 0, 0),
+	);
+
+	assert.equal(parsed?.dimensions.length, 3);
+	assert.equal(parsed?.dimensions[0]?.name, "5h");
+	assert.equal(parsed?.dimensions[0]?.remaining, 78);
+	assert.equal(parsed?.dimensions[0]?.resetAt, Date.UTC(2026, 0, 1, 5, 0, 0));
+	assert.equal(parsed?.dimensions[2]?.name, "weekly_sonnet");
+	assert.equal(parsed?.dimensions[2]?.remaining, 20);
+});
+
 test("subscription quota fetch uses Pi OAuth token for OpenAI Codex", async () => {
 	type FetchLike = (
 		input: string,
@@ -254,16 +282,71 @@ test("subscription quota fetch uses Pi OAuth token for OpenAI Codex", async () =
 			Date.UTC(2026, 0, 1, 0, 0, 0),
 		);
 
-		assert.equal(
-			requestedUrl,
-			"https://chatgpt.com/backend-api/wham/usage",
-		);
+		assert.equal(requestedUrl, "https://chatgpt.com/backend-api/wham/usage");
 		assert.equal(authorization, "Bearer oauth-token");
 		assert.equal(parsed?.dimensions[0]?.remaining, 60);
-		assert.equal(
-			parsed?.dimensions[0]?.resetAt,
-			Date.UTC(2026, 0, 1, 0, 5, 0),
+		assert.equal(parsed?.dimensions[0]?.resetAt, Date.UTC(2026, 0, 1, 0, 5, 0));
+	} finally {
+		globalWithFetch.fetch = originalFetch;
+	}
+});
+
+test("subscription quota fetch uses Pi OAuth token for Anthropic", async () => {
+	type FetchLike = (
+		input: string,
+		init?: { headers?: Record<string, string>; signal?: unknown },
+	) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
+	const globalWithFetch = globalThis as unknown as { fetch: FetchLike };
+	const originalFetch = globalWithFetch.fetch;
+	let requestedUrl = "";
+	let authorization = "";
+	let beta = "";
+	globalWithFetch.fetch = async (input, init) => {
+		requestedUrl = input;
+		authorization = init?.headers?.authorization ?? "";
+		beta = init?.headers?.["anthropic-beta"] ?? "";
+		return {
+			ok: true,
+			status: 200,
+			async json() {
+				return {
+					five_hour: {
+						utilization: 0.25,
+						resets_at: "2026-01-01T01:00:00Z",
+					},
+				};
+			},
+		};
+	};
+	try {
+		const parsed = await fetchSubscriptionQuota(
+			{
+				ui: {
+					theme: { fg: (_color, text) => text },
+					notify() {
+						// no-op
+					},
+					setStatus() {
+						// no-op
+					},
+				},
+				modelRegistry: {
+					async getApiKeyForProvider(provider) {
+						assert.equal(provider, "anthropic");
+						return "oauth-token";
+					},
+				},
+				hasUI: true,
+				mode: "tui",
+			},
+			{ provider: "anthropic", model: "claude-sonnet-4" },
+			Date.UTC(2026, 0, 1, 0, 0, 0),
 		);
+
+		assert.equal(requestedUrl, "https://api.anthropic.com/api/oauth/usage");
+		assert.equal(authorization, "Bearer oauth-token");
+		assert.equal(beta, "oauth-2025-04-20");
+		assert.equal(parsed?.dimensions[0]?.remaining, 75);
 	} finally {
 		globalWithFetch.fetch = originalFetch;
 	}
