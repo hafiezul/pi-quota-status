@@ -9,6 +9,7 @@ import type {
 	PiModelSelectEvent,
 } from "../src/pi-types.js";
 import {
+	extractChatGPTAccountId,
 	fetchSubscriptionQuota,
 	parseAnthropicUsage,
 	parseOpenAICodexUsage,
@@ -203,6 +204,48 @@ test("OpenAI Codex subscription usage parses quota windows", () => {
 	assert.equal(parsed?.dimensions[1]?.remaining, 35);
 });
 
+test("OpenAI Codex subscription usage parses block metadata and extra limits", () => {
+	const parsed = parseOpenAICodexUsage(
+		{
+			rate_limit: {
+				allowed: false,
+				limit_reached: true,
+				primary_window: {
+					used_percent: 100,
+					reset_at: 1_767_200_400,
+				},
+			},
+			rate_limit_reached_type: "primary",
+			additional_rate_limits: [
+				{
+					id: "GPT-5.3-Codex-Spark",
+					used_percent: 12,
+					reset_at: 1_767_200_500,
+				},
+			],
+		},
+		Date.UTC(2026, 0, 1, 0, 0, 0),
+		{ accountHeaderSent: true },
+	);
+
+	assert.equal(parsed?.metadata?.accountHeaderSent, true);
+	assert.equal(parsed?.metadata?.allowed, false);
+	assert.equal(parsed?.metadata?.limitReached, true);
+	assert.equal(parsed?.metadata?.rateLimitReachedType, "primary");
+	assert.equal(parsed?.metadata?.extraLimits?.[0]?.name, "GPT-5.3-Codex-Spark");
+	assert.equal(parsed?.metadata?.extraLimits?.[0]?.remaining, 88);
+});
+
+test("OpenAI Codex account id is extracted from OAuth JWT", () => {
+	assert.equal(
+		extractChatGPTAccountId(
+			"header.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdF8xMjMifX0.sig",
+		),
+		"acct_123",
+	);
+	assert.equal(extractChatGPTAccountId("not-a-jwt"), undefined);
+});
+
 test("Anthropic subscription usage parses quota windows", () => {
 	const parsed = parseAnthropicUsage(
 		{
@@ -286,6 +329,61 @@ test("subscription quota fetch uses Pi OAuth token for OpenAI Codex", async () =
 		assert.equal(authorization, "Bearer oauth-token");
 		assert.equal(parsed?.dimensions[0]?.remaining, 60);
 		assert.equal(parsed?.dimensions[0]?.resetAt, Date.UTC(2026, 0, 1, 0, 5, 0));
+	} finally {
+		globalWithFetch.fetch = originalFetch;
+	}
+});
+
+test("subscription quota fetch sends ChatGPT account header when OAuth JWT contains it", async () => {
+	type FetchLike = (
+		input: string,
+		init?: { headers?: Record<string, string>; signal?: unknown },
+	) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
+	const globalWithFetch = globalThis as unknown as { fetch: FetchLike };
+	const originalFetch = globalWithFetch.fetch;
+	let accountHeader = "";
+	globalWithFetch.fetch = async (_input, init) => {
+		accountHeader = init?.headers?.["ChatGPT-Account-Id"] ?? "";
+		return {
+			ok: true,
+			status: 200,
+			async json() {
+				return {
+					rate_limit: {
+						primary_window: {
+							used_percent: 40,
+							reset_after_seconds: 300,
+						},
+					},
+				};
+			},
+		};
+	};
+	try {
+		await fetchSubscriptionQuota(
+			{
+				ui: {
+					theme: { fg: (_color, text) => text },
+					notify() {
+						// no-op
+					},
+					setStatus() {
+						// no-op
+					},
+				},
+				modelRegistry: {
+					async getApiKeyForProvider() {
+						return "header.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdF8xMjMifX0.sig";
+					},
+				},
+				hasUI: true,
+				mode: "tui",
+			},
+			{ provider: "openai-codex", model: "gpt-5.5" },
+			Date.UTC(2026, 0, 1, 0, 0, 0),
+		);
+
+		assert.equal(accountHeader, "acct_123");
 	} finally {
 		globalWithFetch.fetch = originalFetch;
 	}

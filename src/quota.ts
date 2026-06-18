@@ -6,6 +6,7 @@ import type {
 	ModelRef,
 	ObservationSource,
 	ParsedQuotaObservation,
+	PendingQuotaObservation,
 	QuotaDimensionObservation,
 	QuotaObservation,
 	QuotaRow,
@@ -58,6 +59,7 @@ export function observationFromParsed(
 		observedAt: now,
 		updatedAt: now,
 		dimensions,
+		...(parsed.metadata ? { metadata: parsed.metadata } : {}),
 	};
 }
 
@@ -68,6 +70,80 @@ export function upsertObservation(
 	state.observations[modelKey(observation.provider, observation.model)] =
 		observation;
 	return state;
+}
+
+export type SubscriptionObservationApplyAction =
+	| "accepted"
+	| "suppressed"
+	| "confirmed";
+
+export interface SubscriptionObservationApplyResult {
+	action: SubscriptionObservationApplyAction;
+	reason?: string;
+	priorRemaining?: number;
+	newRemaining?: number;
+	resetAt?: number;
+	retryRecommended?: boolean;
+	metadata: QuotaObservation["metadata"];
+}
+
+export function applySubscriptionObservation(
+	state: QuotaState,
+	observation: QuotaObservation,
+	now = Date.now(),
+): SubscriptionObservationApplyResult {
+	const key = modelKey(observation.provider, observation.model);
+	const existing = state.observations[key];
+	const pending = state.pendingObservations?.[key];
+	const suspicious = suspiciousCodexDrop(existing, observation, now);
+	const prior = findDimensionByNames(existing?.dimensions ?? [], ["5h"], now);
+	const next = findDimensionByNames(observation.dimensions, ["5h"], now);
+	const priorRemaining = calculatePercent(prior?.remaining, prior?.limit);
+	const newRemaining = calculatePercent(next?.remaining, next?.limit);
+	const resetAt = next?.resetAt;
+	if (!state.pendingObservations) state.pendingObservations = {};
+	if (suspicious && !hasExplicitSubscriptionBlock(observation)) {
+		if (pendingConfirmsObservation(pending, observation, now)) {
+			delete state.pendingObservations[key];
+			upsertObservation(state, observation);
+			return {
+				action: "confirmed",
+				reason: "second matching suspicious poll confirmed",
+				priorRemaining,
+				newRemaining,
+				resetAt,
+				metadata: observation.metadata,
+			};
+		}
+		state.pendingObservations[key] = {
+			observation,
+			reason: "high-to-low same-window Codex 5h quota drop",
+			createdAt: pending?.createdAt ?? now,
+			updatedAt: now,
+			priorRemaining,
+			newRemaining,
+			resetAt,
+		};
+		return {
+			action: "suppressed",
+			reason: "high-to-low same-window Codex 5h quota drop",
+			priorRemaining,
+			newRemaining,
+			resetAt,
+			retryRecommended: !pending,
+			metadata: observation.metadata,
+		};
+	}
+	delete state.pendingObservations[key];
+	upsertObservation(state, observation);
+	return {
+		action: "accepted",
+		...(suspicious ? { reason: "explicit server block signal accepted" } : {}),
+		priorRemaining,
+		newRemaining,
+		resetAt,
+		metadata: observation.metadata,
+	};
 }
 
 export function ensureFallbackObservation(
@@ -180,6 +256,80 @@ export function selectMostConstrainedDimension(
 		}
 	}
 	return best;
+}
+
+function suspiciousCodexDrop(
+	existing: QuotaObservation | undefined,
+	observation: QuotaObservation,
+	now: number,
+): boolean {
+	if (observation.provider !== "openai-codex") return false;
+	if (observation.source !== "subscription") return false;
+	if (existing?.source !== "subscription") return false;
+	const prior = findDimensionByNames(existing.dimensions, ["5h"], now);
+	const next = findDimensionByNames(observation.dimensions, ["5h"], now);
+	const priorPercent = calculatePercent(prior?.remaining, prior?.limit);
+	const nextPercent = calculatePercent(next?.remaining, next?.limit);
+	return Boolean(
+		priorPercent !== undefined &&
+			nextPercent !== undefined &&
+			priorPercent >= 50 &&
+			nextPercent <= 5 &&
+			sameResetWindow(prior?.resetAt, next?.resetAt),
+	);
+}
+
+function hasExplicitSubscriptionBlock(observation: QuotaObservation): boolean {
+	const metadata = observation.metadata;
+	return Boolean(
+		metadata?.allowed === false ||
+			metadata?.limitReached === true ||
+			(metadata?.rateLimitReachedType !== undefined &&
+				metadata.rateLimitReachedType !== null &&
+				metadata.rateLimitReachedType !== ""),
+	);
+}
+
+function pendingConfirmsObservation(
+	pending: PendingQuotaObservation | undefined,
+	observation: QuotaObservation,
+	now: number,
+): boolean {
+	if (!pending) return false;
+	const pendingDimension = findDimensionByNames(
+		pending.observation.dimensions,
+		["5h"],
+		now,
+	);
+	const nextDimension = findDimensionByNames(
+		observation.dimensions,
+		["5h"],
+		now,
+	);
+	const pendingPercent = calculatePercent(
+		pendingDimension?.remaining,
+		pendingDimension?.limit,
+	);
+	const nextPercent = calculatePercent(
+		nextDimension?.remaining,
+		nextDimension?.limit,
+	);
+	return Boolean(
+		pendingPercent !== undefined &&
+			nextPercent !== undefined &&
+			pendingPercent <= 5 &&
+			nextPercent <= 5 &&
+			Math.abs(pendingPercent - nextPercent) <= 2 &&
+			sameResetWindow(pendingDimension?.resetAt, nextDimension?.resetAt),
+	);
+}
+
+function sameResetWindow(
+	left: number | undefined,
+	right: number | undefined,
+): boolean {
+	if (left === undefined || right === undefined) return false;
+	return Math.abs(left - right) <= 120_000;
 }
 
 function selectDimensionForObservation(

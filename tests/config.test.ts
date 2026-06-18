@@ -9,6 +9,7 @@ import {
 } from "../src/config.js";
 import { adapterMatches, matchesGlob, selectAdapter } from "../src/match.js";
 import {
+	applySubscriptionObservation,
 	buildQuotaRows,
 	observationFromParsed,
 	consumeFallbackQuota,
@@ -297,6 +298,179 @@ test("subscription quota still surfaces an exhausted weekly window", () => {
 	const selected = selectQuotaForModel(state, config, ref, now);
 	assert.equal(selected?.dimension.name, "weekly");
 	assert.equal(selected?.percentRemaining, 0);
+});
+
+test("suspicious Codex 5h quota drop is suppressed until confirmed", () => {
+	const state: QuotaState = { version: 1, observations: {} };
+	const ref = { provider: "openai-codex", model: "gpt-5.5" };
+	upsertObservation(
+		state,
+		observationFromParsed(
+			ref,
+			{ name: "subscription" },
+			{
+				dimensions: [
+					{ name: "5h", limit: 100, remaining: 97, resetAt: now + 18_000_000 },
+					{
+						name: "weekly",
+						limit: 100,
+						remaining: 94,
+						resetAt: now + 604_800_000,
+					},
+				],
+			},
+			"subscription",
+			200,
+			now,
+		),
+	);
+	const suspicious = observationFromParsed(
+		ref,
+		{ name: "subscription" },
+		{
+			dimensions: [
+				{ name: "5h", limit: 100, remaining: 0, resetAt: now + 18_000_000 },
+				{
+					name: "weekly",
+					limit: 100,
+					remaining: 94,
+					resetAt: now + 604_800_000,
+				},
+			],
+			metadata: {
+				allowed: true,
+				limitReached: false,
+				rateLimitReachedType: null,
+			},
+		},
+		"subscription",
+		200,
+		now + 60_000,
+		state.observations["openai-codex/gpt-5.5"],
+	);
+
+	const first = applySubscriptionObservation(state, suspicious, now + 60_000);
+	assert.equal(first.action, "suppressed");
+	assert.equal(
+		state.observations["openai-codex/gpt-5.5"]?.dimensions[0]?.remaining,
+		97,
+	);
+	assert.equal(
+		state.pendingObservations?.["openai-codex/gpt-5.5"]?.newRemaining,
+		0,
+	);
+
+	const second = applySubscriptionObservation(state, suspicious, now + 67_000);
+	assert.equal(second.action, "confirmed");
+	assert.equal(
+		state.observations["openai-codex/gpt-5.5"]?.dimensions[0]?.remaining,
+		0,
+	);
+	assert.equal(state.pendingObservations?.["openai-codex/gpt-5.5"], undefined);
+});
+
+test("explicit Codex block signal accepts near-zero quota immediately", () => {
+	const state: QuotaState = { version: 1, observations: {} };
+	const ref = { provider: "openai-codex", model: "gpt-5.5" };
+	upsertObservation(
+		state,
+		observationFromParsed(
+			ref,
+			{ name: "subscription" },
+			{
+				dimensions: [
+					{ name: "5h", limit: 100, remaining: 97, resetAt: now + 18_000_000 },
+				],
+			},
+			"subscription",
+			200,
+			now,
+		),
+	);
+	const blocked = observationFromParsed(
+		ref,
+		{ name: "subscription" },
+		{
+			dimensions: [
+				{ name: "5h", limit: 100, remaining: 0, resetAt: now + 18_000_000 },
+			],
+			metadata: {
+				allowed: false,
+				limitReached: true,
+				rateLimitReachedType: "primary",
+			},
+		},
+		"subscription",
+		200,
+		now + 60_000,
+		state.observations["openai-codex/gpt-5.5"],
+	);
+
+	const result = applySubscriptionObservation(state, blocked, now + 60_000);
+	assert.equal(result.action, "accepted");
+	assert.equal(
+		state.observations["openai-codex/gpt-5.5"]?.dimensions[0]?.remaining,
+		0,
+	);
+	assert.equal(state.pendingObservations?.["openai-codex/gpt-5.5"], undefined);
+});
+
+test("sane Codex poll clears pending suspicious quota", () => {
+	const state: QuotaState = { version: 1, observations: {} };
+	const ref = { provider: "openai-codex", model: "gpt-5.5" };
+	upsertObservation(
+		state,
+		observationFromParsed(
+			ref,
+			{ name: "subscription" },
+			{
+				dimensions: [
+					{ name: "5h", limit: 100, remaining: 97, resetAt: now + 18_000_000 },
+				],
+			},
+			"subscription",
+			200,
+			now,
+		),
+	);
+	applySubscriptionObservation(
+		state,
+		observationFromParsed(
+			ref,
+			{ name: "subscription" },
+			{
+				dimensions: [
+					{ name: "5h", limit: 100, remaining: 0, resetAt: now + 18_000_000 },
+				],
+			},
+			"subscription",
+			200,
+			now + 60_000,
+			state.observations["openai-codex/gpt-5.5"],
+		),
+		now + 60_000,
+	);
+	const sane = observationFromParsed(
+		ref,
+		{ name: "subscription" },
+		{
+			dimensions: [
+				{ name: "5h", limit: 100, remaining: 95, resetAt: now + 18_000_000 },
+			],
+		},
+		"subscription",
+		200,
+		now + 67_000,
+		state.observations["openai-codex/gpt-5.5"],
+	);
+
+	const result = applySubscriptionObservation(state, sane, now + 67_000);
+	assert.equal(result.action, "accepted");
+	assert.equal(
+		state.observations["openai-codex/gpt-5.5"]?.dimensions[0]?.remaining,
+		95,
+	);
+	assert.equal(state.pendingObservations?.["openai-codex/gpt-5.5"], undefined);
 });
 
 test("fallback initializes and deducts fixed-window turns", () => {

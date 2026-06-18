@@ -225,7 +225,9 @@ On session start, model selection, `/quota reload`, and every `refreshIntervalMs
 Currently supported poll sources:
 
 - `anthropic` — polls Anthropic's OAuth usage endpoint and maps `five_hour`, `seven_day`, and active-model weekly buckets into quota dimensions. The footer shows `5h` plus the stricter relevant weekly bucket (`Wk`, `Son`, or `Opus`).
-- `openai-codex` — polls the ChatGPT Codex usage endpoint and maps its 5h and weekly windows into quota dimensions.
+- `openai-codex` — polls the ChatGPT Codex usage endpoint and maps its 5h and weekly windows into quota dimensions. When the OAuth access token contains a ChatGPT account id, the request includes `ChatGPT-Account-Id` to avoid ambiguous account selection.
+
+For OpenAI Codex, a sudden same-window 5h drop from high remaining quota to near-zero is treated as suspicious unless the server explicitly reports a block (`allowed: false`, `limit_reached: true`, or a non-null `rate_limit_reached_type`). The extension keeps the last trusted value, stores the suspicious observation as pending, and schedules one quick retry. If the second poll confirms the near-zero value, it is accepted; if a sane value returns, the pending observation is discarded. `/quota debug` reports this using sanitized fields only.
 
 Polling is conditional on the model being authenticated through `/login`; the config template is not personalized based on which user is logged in. Provider response headers and fallback observations remain supported for other `/login` subscription providers.
 
@@ -240,7 +242,7 @@ Polling is conditional on the model being authenticated through `/login`; the co
 
 ## Privacy notes
 
-The extension stores parsed numbers and reset timestamps only. It does not persist raw headers, prompts, responses, or API keys. `/quota debug` reports adapter names, model ids, status categories, and parsed-dimension counts, not raw header values.
+The extension stores parsed numbers, reset timestamps, and optional pending suspicious-observation metadata only. It does not persist raw headers, prompts, responses, OAuth tokens, account ids, emails, or API keys. `/quota debug` reports adapter names, model ids, status categories, parsed-dimension counts, and sanitized quota-poll flags, not raw provider payloads.
 
 ## Known limitations
 

@@ -16,7 +16,15 @@ export function normalizeState(value: unknown): QuotaState {
 		maybe.observations && typeof maybe.observations === "object"
 			? maybe.observations
 			: {};
-	return { version: 1, observations: { ...observations } };
+	const pendingObservations =
+		maybe.pendingObservations && typeof maybe.pendingObservations === "object"
+			? { ...maybe.pendingObservations }
+			: undefined;
+	return {
+		version: 1,
+		observations: { ...observations },
+		...(pendingObservations ? { pendingObservations } : {}),
+	};
 }
 
 export async function readJsonFile<T>(

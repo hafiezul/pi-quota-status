@@ -16,12 +16,14 @@ import type {
 	PiModelSelectEvent,
 } from "./pi-types.js";
 import {
+	applySubscriptionObservation,
 	buildQuotaRows,
 	consumeFallbackQuota,
 	getModelRef,
 	observationFromParsed,
 	selectFooterQuotaForModel,
 	upsertObservation,
+	type SubscriptionObservationApplyResult,
 } from "./quota.js";
 import { loadState, mergeStateFile } from "./storage.js";
 import { fetchSubscriptionQuota } from "./subscription.js";
@@ -40,6 +42,7 @@ interface RuntimeState {
 	lastErrors: string[];
 	debug: string[];
 	refreshTimer?: unknown;
+	quickRetryTimer?: unknown;
 	refreshInFlight: boolean;
 	sessionGeneration: number;
 }
@@ -146,6 +149,7 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 		try {
 			const parsed = await fetchSubscriptionQuota(ctx, ref, now);
 			if (!isCurrentSession(generation) || !parsed) return;
+			let applyResult: SubscriptionObservationApplyResult | undefined;
 			await mutateState((state) => {
 				const existing = state.observations[modelKey(ref.provider, ref.model)];
 				const observation = observationFromParsed(
@@ -157,12 +161,13 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 					now,
 					existing,
 				);
-				upsertObservation(state, observation);
+				applyResult = applySubscriptionObservation(state, observation, now);
 			});
 			if (!isCurrentSession(generation)) return;
 			recordDebug(
-				`${ref.provider}/${ref.model}: polled ${parsed.dimensions.length} subscription quota dimension(s)`,
+				formatSubscriptionPollDebug(ref, parsed.dimensions.length, applyResult),
 			);
+			if (applyResult?.retryRecommended) scheduleQuickRetry(ctx, generation);
 		} catch (error) {
 			if (isStaleContextError(error) || !isCurrentSession(generation)) return;
 			recordDebug(
@@ -192,10 +197,20 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 		});
 	}
 
+	function scheduleQuickRetry(ctx: PiContext, generation: number): void {
+		if (runtime.quickRetryTimer || !isCurrentSession(generation)) return;
+		runtime.quickRetryTimer = setTimeout(() => {
+			runtime.quickRetryTimer = undefined;
+			refreshAndUpdateStatusInBackground(ctx, generation);
+		}, 7_500);
+	}
+
 	pi.on("session_start", async (_event, ctx) => {
 		const generation = ++runtime.sessionGeneration;
 		if (runtime.refreshTimer) clearInterval(runtime.refreshTimer);
+		if (runtime.quickRetryTimer) clearTimeout(runtime.quickRetryTimer);
 		runtime.refreshTimer = undefined;
+		runtime.quickRetryTimer = undefined;
 		await reloadFromDisk();
 		if (!isCurrentSession(generation)) return;
 		runtime.activeModel = getModelRef(ctx.model);
@@ -210,7 +225,9 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 	pi.on("session_shutdown", async (_event, ctx) => {
 		runtime.sessionGeneration++;
 		if (runtime.refreshTimer) clearInterval(runtime.refreshTimer);
+		if (runtime.quickRetryTimer) clearTimeout(runtime.quickRetryTimer);
 		runtime.refreshTimer = undefined;
+		runtime.quickRetryTimer = undefined;
 		try {
 			ctx.ui.setStatus(STATUS_KEY, undefined);
 		} catch (error) {
@@ -467,6 +484,47 @@ function isUsingSubscription(ctx: PiContext, ref: ModelRef): boolean {
 
 function formatSubscriptionAuth(ctx: PiContext, ref: ModelRef): string {
 	return isUsingSubscription(ctx, ref) ? "yes" : "no";
+}
+
+function formatSubscriptionPollDebug(
+	ref: ModelRef,
+	dimensionCount: number,
+	result: SubscriptionObservationApplyResult | undefined,
+): string {
+	const prefix = `${ref.provider}/${ref.model}: polled ${dimensionCount} subscription quota dimension(s)`;
+	if (!result) return prefix;
+	const details = [
+		`action=${result.action}`,
+		result.reason ? `reason=${result.reason}` : undefined,
+		`5h=${formatDebugPercent(result.priorRemaining)}->${formatDebugPercent(result.newRemaining)}`,
+		result.resetAt
+			? `reset=${new Date(result.resetAt).toISOString()}`
+			: undefined,
+		`allowed=${formatDebugValue(result.metadata?.allowed)}`,
+		`limit_reached=${formatDebugValue(result.metadata?.limitReached)}`,
+		`rate_limit_reached_type=${formatDebugValue(result.metadata?.rateLimitReachedType)}`,
+		`account_header=${result.metadata?.accountHeaderSent ? "yes" : "no"}`,
+		result.metadata?.extraLimits?.length
+			? `extra_limits=${result.metadata.extraLimits
+					.map(
+						(limit) => `${limit.name}:${formatDebugPercent(limit.remaining)}`,
+					)
+					.join(",")}`
+			: undefined,
+	].filter((part): part is string => Boolean(part));
+	return `${prefix}; ${details.join("; ")}`;
+}
+
+function formatDebugPercent(value: number | undefined): string {
+	return value === undefined || Number.isNaN(value)
+		? "unknown"
+		: `${Math.floor(value)}%`;
+}
+
+function formatDebugValue(value: unknown): string {
+	if (value === undefined) return "unknown";
+	if (value === null) return "null";
+	return String(value);
 }
 
 function formatQuotaSource(runtime: RuntimeState, ref: ModelRef): string {

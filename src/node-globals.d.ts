@@ -4,6 +4,13 @@ declare const process: {
 	cwd(): string;
 };
 
+declare const Buffer: {
+	from(
+		input: string,
+		encoding: "base64",
+	): { toString(encoding: "utf8"): string };
+};
+
 declare function setTimeout(
 	handler: (...args: unknown[]) => void,
 	timeout?: number,
@@ -17,7 +24,7 @@ declare function setInterval(
 ): unknown;
 declare function clearInterval(intervalId: unknown): void;
 
-interface AbortSignal {}
+type AbortSignal = {};
 
 declare class AbortController {
 	readonly signal: AbortSignal;

@@ -62,9 +62,25 @@ export interface ParsedQuotaDimension {
 	resetAt?: number;
 }
 
+export interface ParsedExtraQuotaLimit {
+	name: string;
+	usedPercent?: number;
+	remaining?: number;
+	resetAt?: number;
+}
+
+export interface ParsedQuotaMetadata {
+	accountHeaderSent?: boolean;
+	allowed?: boolean;
+	limitReached?: boolean;
+	rateLimitReachedType?: string | null;
+	extraLimits?: ParsedExtraQuotaLimit[];
+}
+
 export interface ParsedQuotaObservation {
 	dimensions: ParsedQuotaDimension[];
 	resetAt?: number;
+	metadata?: ParsedQuotaMetadata;
 }
 
 export interface QuotaDimensionObservation extends ParsedQuotaDimension {
@@ -81,11 +97,23 @@ export interface QuotaObservation {
 	observedAt: number;
 	updatedAt: number;
 	dimensions: QuotaDimensionObservation[];
+	metadata?: ParsedQuotaMetadata;
+}
+
+export interface PendingQuotaObservation {
+	observation: QuotaObservation;
+	reason: string;
+	createdAt: number;
+	updatedAt: number;
+	priorRemaining?: number;
+	newRemaining?: number;
+	resetAt?: number;
 }
 
 export interface QuotaState {
 	version: 1;
 	observations: Record<string, QuotaObservation>;
+	pendingObservations?: Record<string, PendingQuotaObservation>;
 }
 
 export interface SelectedQuota {
