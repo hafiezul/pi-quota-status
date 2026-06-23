@@ -504,6 +504,7 @@ function formatSubscriptionPollDebug(
 		`limit_reached=${formatDebugValue(result.metadata?.limitReached)}`,
 		`rate_limit_reached_type=${formatDebugValue(result.metadata?.rateLimitReachedType)}`,
 		`account_header=${result.metadata?.accountHeaderSent ? "yes" : "no"}`,
+		result.metadata?.codexCliRpcFallback ? "codex_rpc=yes" : undefined,
 		result.metadata?.extraLimits?.length
 			? `extra_limits=${result.metadata.extraLimits
 					.map(

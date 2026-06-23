@@ -1,4 +1,21 @@
+import { fetchCodexCliRateLimits } from "./codex-rpc.js";
+import {
+	mergeCodexCliRateLimits,
+	needsCodexCliReconciliation,
+	OPENAI_CODEX_PROVIDER,
+} from "./codex-policy.js";
+import { clampPercent } from "./format.js";
 import type { PiContext } from "./pi-types.js";
+import {
+	asRecord,
+	booleanValue,
+	firstDefined,
+	normalizedUsedPercent,
+	nullableStringValue,
+	numberValue,
+	stringValue,
+	timestampValue,
+} from "./parse-utils.js";
 import type {
 	ModelRef,
 	ParsedExtraQuotaLimit,
@@ -8,7 +25,6 @@ import type {
 } from "./types.js";
 
 const REQUEST_TIMEOUT_MS = 10_000;
-const OPENAI_CODEX_PROVIDER = "openai-codex";
 const ANTHROPIC_PROVIDER = "anthropic";
 const OPENAI_CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const ANTHROPIC_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
@@ -42,14 +58,21 @@ export async function fetchSubscriptionQuota(
 	return fetchAnthropicQuota(token, now);
 }
 
+interface OpenAICodexQuotaOptions {
+	fetchCliRateLimits?: (
+		now: number,
+	) => Promise<ParsedQuotaObservation | undefined>;
+}
+
 export async function fetchOpenAICodexQuota(
 	token: string,
 	now = Date.now(),
+	options: OpenAICodexQuotaOptions = {},
 ): Promise<ParsedQuotaObservation | undefined> {
 	const accountId = extractChatGPTAccountId(token);
 	const headers: Record<string, string> = { authorization: `Bearer ${token}` };
 	if (accountId) headers["ChatGPT-Account-Id"] = accountId;
-	return fetchQuotaJson(
+	const parsed = await fetchQuotaJson(
 		OPENAI_CODEX_USAGE_URL,
 		headers,
 		"OpenAI Codex",
@@ -58,6 +81,15 @@ export async function fetchOpenAICodexQuota(
 				accountHeaderSent: Boolean(accountId),
 			}),
 	);
+	if (!parsed || !needsCodexCliReconciliation(parsed)) return parsed;
+	try {
+		const cliParsed = await (
+			options.fetchCliRateLimits ?? fetchCodexCliRateLimits
+		)(now);
+		return mergeCodexCliRateLimits(parsed, cliParsed) ?? parsed;
+	} catch {
+		return parsed;
+	}
 }
 
 export async function fetchAnthropicQuota(
@@ -138,10 +170,12 @@ function parseOpenAICodexMetadata(
 			rateLimit?.limit_reached ?? rateLimit?.limitReached,
 		),
 		rateLimitReachedType: nullableStringValue(
-			root?.rate_limit_reached_type ??
-				root?.rateLimitReachedType ??
-				rateLimit?.rate_limit_reached_type ??
+			firstDefined(
+				root?.rate_limit_reached_type,
+				root?.rateLimitReachedType,
+				rateLimit?.rate_limit_reached_type,
 				rateLimit?.rateLimitReachedType,
+			),
 		),
 		extraLimits: extraLimits
 			.map((limit) => limit.metadata)
@@ -275,12 +309,6 @@ function parseResetAt(
 	return resetAfter === undefined ? undefined : now + resetAfter * 1000;
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-	return value && typeof value === "object"
-		? (value as Record<string, unknown>)
-		: undefined;
-}
-
 function decodeJwtPayload(token: string): Record<string, unknown> | undefined {
 	const [, payload] = token.split(".");
 	if (!payload) return undefined;
@@ -294,50 +322,4 @@ function decodeJwtPayload(token: string): Record<string, unknown> | undefined {
 	} catch {
 		return undefined;
 	}
-}
-
-function booleanValue(value: unknown): boolean | undefined {
-	if (typeof value === "boolean") return value;
-	if (typeof value !== "string") return undefined;
-	const normalized = value.trim().toLowerCase();
-	if (normalized === "true") return true;
-	if (normalized === "false") return false;
-	return undefined;
-}
-
-function nullableStringValue(value: unknown): string | null | undefined {
-	if (value === null) return null;
-	return stringValue(value);
-}
-
-function numberValue(value: unknown): number | undefined {
-	if (typeof value === "number" && Number.isFinite(value)) return value;
-	if (typeof value !== "string" || !value.trim()) return undefined;
-	const parsed = Number(value);
-	return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function normalizedUsedPercent(value: unknown): number | undefined {
-	const parsed = numberValue(value);
-	if (parsed === undefined) return undefined;
-	return parsed >= 0 && parsed <= 1 ? parsed * 100 : parsed;
-}
-
-function timestampValue(value: unknown): number | undefined {
-	const numeric = numberValue(value);
-	if (numeric !== undefined)
-		return numeric > 1_000_000_000_000 ? numeric : numeric * 1000;
-	if (typeof value !== "string" || !value.trim()) return undefined;
-	const parsedDate = Date.parse(value);
-	return Number.isFinite(parsedDate) ? parsedDate : undefined;
-}
-
-function stringValue(value: unknown): string | undefined {
-	if (typeof value !== "string") return undefined;
-	const trimmed = value.trim();
-	return trimmed ? trimmed : undefined;
-}
-
-function clampPercent(value: number): number {
-	return Math.max(0, Math.min(100, value));
 }

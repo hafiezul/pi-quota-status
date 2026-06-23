@@ -31,13 +31,13 @@ declare class AbortController {
 	abort(): void;
 }
 
-declare function fetch(
+declare const fetch: (
 	input: string,
 	init?: {
 		headers?: Record<string, string>;
 		signal?: AbortSignal;
 	},
-): Promise<{
+) => Promise<{
 	ok: boolean;
 	status: number;
 	json(): Promise<unknown>;
@@ -54,6 +54,31 @@ declare module "node:path" {
 
 declare module "node:fs" {
 	export function existsSync(path: string): boolean;
+}
+
+declare module "node:child_process" {
+	export interface ChildProcess {
+		stdin: {
+			write(data: string, callback?: (error?: Error | null) => void): boolean;
+		};
+		stdout: {
+			setEncoding(encoding: "utf8"): void;
+			on(event: "data", listener: (chunk: string) => void): unknown;
+		};
+		stderr: { resume(): void };
+		killed: boolean;
+		kill(signal?: string): boolean;
+		on(event: "error", listener: (error: Error) => void): unknown;
+		on(
+			event: "close",
+			listener: (code: number | null, signal: string | null) => void,
+		): unknown;
+	}
+	export function spawn(
+		command: string,
+		args?: string[],
+		options?: { stdio?: string[]; env?: Record<string, string | undefined> },
+	): ChildProcess;
 }
 
 declare module "node:fs/promises" {

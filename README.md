@@ -16,7 +16,7 @@ The extension is intentionally scoped to `/login` subscription models. API-key, 
 ## Supported quota sources
 
 - Anthropic `/login` models (`anthropic/claude-*`): subscription polling, response-header parsing, and optional fixed-window fallback.
-- OpenAI Codex `/login` models (`openai-codex/*`): subscription polling from the ChatGPT Codex usage endpoint.
+- OpenAI Codex `/login` models (`openai-codex/*`): subscription polling from the ChatGPT Codex usage endpoint, with local Codex CLI RPC reconciliation when the endpoint reports a healthy-but-stale 5h zero.
 - Generic OpenAI-compatible headers: optional named header mappings for OpenAI-compatible providers or proxies.
 
 The extension only displays quota for models Pi reports as using `/login` OAuth. If the same provider/model is configured with an API key, it is ignored.
@@ -26,6 +26,7 @@ The extension only displays quota for models Pi reports as using `/login` OAuth.
 - Pi coding agent with extension package support.
 - Node.js `>=22.19.0`.
 - A provider/model authenticated through Pi's `/login` OAuth flow for subscription quota display.
+- Optional: the `codex` CLI on `PATH` for OpenAI Codex stale-zero reconciliation. If unavailable, the extension keeps the last trusted value and retries instead of failing.
 
 This package is a Pi extension package, not a standalone CLI.
 
@@ -88,7 +89,7 @@ Read the [configuration reference](docs/configuration.md) for:
 - Top-level config and adapter fields.
 - Anthropic and generic header adapter examples.
 - Manual fixed-window fallback quotas.
-- Subscription polling behavior and suspicious OpenAI Codex observation handling.
+- Subscription polling behavior, Codex CLI reconciliation, and suspicious OpenAI Codex observation handling.
 
 ## UI behavior
 

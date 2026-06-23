@@ -300,6 +300,55 @@ test("subscription quota still surfaces an exhausted weekly window", () => {
 	assert.equal(selected?.percentRemaining, 0);
 });
 
+test("healthy Codex metadata hides a persisted bogus 5h zero", () => {
+	const config: QuotaStatusConfig = normalizeConfig({
+		adapters: [{ name: "generic", provider: "openai-codex", models: ["*"] }],
+	});
+	const state: QuotaState = { version: 1, observations: {} };
+	const ref = { provider: "openai-codex", model: "gpt-5.5" };
+	upsertObservation(
+		state,
+		observationFromParsed(
+			ref,
+			{ name: "subscription" },
+			{
+				dimensions: [
+					{
+						name: "5h",
+						limit: 100,
+						remaining: 0,
+						resetAt: now + 5 * 60 * 60 * 1000,
+					},
+					{
+						name: "weekly",
+						limit: 100,
+						remaining: 79,
+						resetAt: now + 5 * 24 * 60 * 60 * 1000,
+					},
+				],
+				metadata: {
+					allowed: true,
+					limitReached: false,
+					rateLimitReachedType: null,
+				},
+			},
+			"subscription",
+			200,
+			now,
+		),
+	);
+
+	const selected = selectQuotaForModel(state, config, ref, now);
+	assert.equal(selected?.dimension.name, "weekly");
+	assert.equal(selected?.percentRemaining, 79);
+	assert.deepEqual(
+		selectFooterQuotaForModel(state, config, ref, now)?.segments.map(
+			(segment) => segment.dimension.name,
+		),
+		["weekly"],
+	);
+});
+
 test("suspicious Codex 5h quota drop is suppressed until confirmed", () => {
 	const state: QuotaState = { version: 1, observations: {} };
 	const ref = { provider: "openai-codex", model: "gpt-5.5" };
@@ -337,11 +386,6 @@ test("suspicious Codex 5h quota drop is suppressed until confirmed", () => {
 					resetAt: now + 604_800_000,
 				},
 			],
-			metadata: {
-				allowed: true,
-				limitReached: false,
-				rateLimitReachedType: null,
-			},
 		},
 		"subscription",
 		200,
@@ -469,6 +513,153 @@ test("sane Codex poll clears pending suspicious quota", () => {
 	assert.equal(
 		state.observations["openai-codex/gpt-5.5"]?.dimensions[0]?.remaining,
 		95,
+	);
+	assert.equal(state.pendingObservations?.["openai-codex/gpt-5.5"], undefined);
+});
+
+test("unblocked Codex rollover zero is suppressed until sane", () => {
+	const state: QuotaState = { version: 1, observations: {} };
+	const ref = { provider: "openai-codex", model: "gpt-5.5" };
+	upsertObservation(
+		state,
+		observationFromParsed(
+			ref,
+			{ name: "subscription" },
+			{
+				dimensions: [
+					{ name: "5h", limit: 100, remaining: 99, resetAt: now - 1_000 },
+					{
+						name: "weekly",
+						limit: 100,
+						remaining: 79,
+						resetAt: now + 604_800_000,
+					},
+				],
+			},
+			"subscription",
+			200,
+			now - 60_000,
+		),
+	);
+	const unblockedZero = observationFromParsed(
+		ref,
+		{ name: "subscription" },
+		{
+			dimensions: [
+				{ name: "5h", limit: 100, remaining: 0, resetAt: now + 18_000_000 },
+				{
+					name: "weekly",
+					limit: 100,
+					remaining: 79,
+					resetAt: now + 604_800_000,
+				},
+			],
+			metadata: {
+				allowed: true,
+				limitReached: false,
+				rateLimitReachedType: null,
+			},
+		},
+		"subscription",
+		200,
+		now,
+		state.observations["openai-codex/gpt-5.5"],
+	);
+
+	const first = applySubscriptionObservation(state, unblockedZero, now);
+	assert.equal(first.action, "suppressed");
+	assert.equal(/contradicted/.test(first.reason ?? ""), true);
+	assert.equal(
+		state.observations["openai-codex/gpt-5.5"]?.dimensions[0]?.remaining,
+		99,
+	);
+
+	const second = applySubscriptionObservation(
+		state,
+		unblockedZero,
+		now + 8_000,
+	);
+	assert.equal(second.action, "suppressed");
+	assert.equal(
+		state.observations["openai-codex/gpt-5.5"]?.dimensions[0]?.remaining,
+		99,
+	);
+
+	const sane = observationFromParsed(
+		ref,
+		{ name: "subscription" },
+		{
+			dimensions: [
+				{ name: "5h", limit: 100, remaining: 98, resetAt: now + 18_000_000 },
+				{
+					name: "weekly",
+					limit: 100,
+					remaining: 79,
+					resetAt: now + 604_800_000,
+				},
+			],
+			metadata: {
+				allowed: true,
+				limitReached: false,
+				rateLimitReachedType: null,
+			},
+		},
+		"subscription",
+		200,
+		now + 60_000,
+		state.observations["openai-codex/gpt-5.5"],
+	);
+	const accepted = applySubscriptionObservation(state, sane, now + 60_000);
+	assert.equal(accepted.action, "accepted");
+	assert.equal(
+		state.observations["openai-codex/gpt-5.5"]?.dimensions[0]?.remaining,
+		98,
+	);
+	assert.equal(state.pendingObservations?.["openai-codex/gpt-5.5"], undefined);
+});
+
+test("old expired Codex prior does not trigger rollover suppression", () => {
+	const state: QuotaState = { version: 1, observations: {} };
+	const ref = { provider: "openai-codex", model: "gpt-5.5" };
+	upsertObservation(
+		state,
+		observationFromParsed(
+			ref,
+			{ name: "subscription" },
+			{
+				dimensions: [
+					{
+						name: "5h",
+						limit: 100,
+						remaining: 99,
+						resetAt: now - 30 * 24 * 60 * 60 * 1000,
+					},
+				],
+			},
+			"subscription",
+			200,
+			now - 30 * 24 * 60 * 60 * 1000,
+		),
+	);
+	const staleZero = observationFromParsed(
+		ref,
+		{ name: "subscription" },
+		{
+			dimensions: [
+				{ name: "5h", limit: 100, remaining: 0, resetAt: now + 18_000_000 },
+			],
+		},
+		"subscription",
+		200,
+		now,
+		state.observations["openai-codex/gpt-5.5"],
+	);
+
+	const result = applySubscriptionObservation(state, staleZero, now);
+	assert.equal(result.action, "accepted");
+	assert.equal(
+		state.observations["openai-codex/gpt-5.5"]?.dimensions[0]?.remaining,
+		0,
 	);
 	assert.equal(state.pendingObservations?.["openai-codex/gpt-5.5"], undefined);
 });

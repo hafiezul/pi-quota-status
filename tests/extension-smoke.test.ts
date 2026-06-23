@@ -10,6 +10,7 @@ import type {
 } from "../src/pi-types.js";
 import {
 	extractChatGPTAccountId,
+	fetchOpenAICodexQuota,
 	fetchSubscriptionQuota,
 	parseAnthropicUsage,
 	parseOpenAICodexUsage,
@@ -329,6 +330,69 @@ test("subscription quota fetch uses Pi OAuth token for OpenAI Codex", async () =
 		assert.equal(authorization, "Bearer oauth-token");
 		assert.equal(parsed?.dimensions[0]?.remaining, 60);
 		assert.equal(parsed?.dimensions[0]?.resetAt, Date.UTC(2026, 0, 1, 0, 5, 0));
+	} finally {
+		globalWithFetch.fetch = originalFetch;
+	}
+});
+
+test("OpenAI Codex healthy zero uses CLI RPC fallback when available", async () => {
+	type FetchLike = (
+		input: string,
+		init?: { headers?: Record<string, string>; signal?: unknown },
+	) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
+	const globalWithFetch = globalThis as unknown as { fetch: FetchLike };
+	const originalFetch = globalWithFetch.fetch;
+	globalWithFetch.fetch = async () => ({
+		ok: true,
+		status: 200,
+		async json() {
+			return {
+				rate_limit: {
+					allowed: true,
+					limit_reached: false,
+					primary_window: {
+						used_percent: 100,
+						reset_at: 1_767_218_000,
+					},
+					secondary_window: {
+						used_percent: 35,
+						reset_at: 1_767_805_200,
+					},
+				},
+			};
+		},
+	});
+	try {
+		const parsed = await fetchOpenAICodexQuota(
+			"oauth-token",
+			Date.UTC(2026, 0, 1, 0, 0, 0),
+			{
+				async fetchCliRateLimits() {
+					return {
+						dimensions: [
+							{
+								name: "5h",
+								limit: 100,
+								remaining: 91,
+								resetAt: 1_767_217_391_000,
+							},
+							{
+								name: "weekly",
+								limit: 100,
+								remaining: 64,
+								resetAt: 1_767_805_246_000,
+							},
+						],
+					};
+				},
+			},
+		);
+
+		assert.equal(parsed?.dimensions[0]?.name, "5h");
+		assert.equal(parsed?.dimensions[0]?.remaining, 91);
+		assert.equal(parsed?.dimensions[1]?.name, "weekly");
+		assert.equal(parsed?.dimensions[1]?.remaining, 64);
+		assert.equal(parsed?.metadata?.codexCliRpcFallback, true);
 	} finally {
 		globalWithFetch.fetch = originalFetch;
 	}

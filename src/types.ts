@@ -74,6 +74,7 @@ export interface ParsedQuotaMetadata {
 	allowed?: boolean;
 	limitReached?: boolean;
 	rateLimitReachedType?: string | null;
+	codexCliRpcFallback?: boolean;
 	extraLimits?: ParsedExtraQuotaLimit[];
 }
 
