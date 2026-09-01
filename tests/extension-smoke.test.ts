@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import quotaStatusExtension from "../src/index.js";
 import type {
 	PiAfterProviderResponseEvent,
@@ -38,6 +40,158 @@ test("extension registers expected events and /quota command", () => {
 		"after_provider_response",
 	]);
 	assert.ok(commands.has("quota"));
+});
+
+test("session start renders saved quota before subscription refresh finishes", async () => {
+	type CapturedHandler = (
+		event: unknown,
+		ctx: PiContext,
+	) => void | Promise<void>;
+	type FetchResponse = {
+		ok: boolean;
+		status: number;
+		json(): Promise<unknown>;
+	};
+	const handlers = new Map<string, CapturedHandler>();
+	const statuses: Array<string | undefined> = [];
+	const dir = join(
+		process.cwd(),
+		`.tmp-quota-status-startup-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+	);
+	await mkdir(dir, { recursive: true });
+	const previousDir = process.env.PI_QUOTA_STATUS_DIR;
+	process.env.PI_QUOTA_STATUS_DIR = dir;
+	await writeFile(
+		join(dir, "config.json"),
+		JSON.stringify({
+			refreshIntervalMs: 60_000,
+			adapters: [
+				{
+					name: "anthropic",
+					type: "anthropic",
+					provider: "anthropic",
+					models: ["claude-*"]
+				},
+			],
+		}),
+	);
+	await writeFile(
+		join(dir, "state.json"),
+		JSON.stringify({
+			version: 1,
+			observations: {
+				"anthropic/claude-sonnet-4": {
+					provider: "anthropic",
+					model: "claude-sonnet-4",
+					source: "subscription",
+					status: 200,
+					observedAt: Date.now() - 1_000,
+					updatedAt: Date.now() - 1_000,
+					dimensions: [
+						{
+							name: "5h",
+							limit: 100,
+							remaining: 72,
+							observedAt: Date.now() - 1_000,
+							source: "subscription"
+						},
+					],
+				},
+			},
+		}),
+	);
+
+	const originalFetch = globalThis.fetch;
+	let releaseFetch!: (response: FetchResponse) => void;
+	let fetchStarted!: () => void;
+	const fetchStartedPromise = new Promise<void>((resolve) => {
+		fetchStarted = resolve;
+	});
+	const fetchResponse = new Promise<FetchResponse>((resolve) => {
+		releaseFetch = resolve;
+	});
+	(globalThis as unknown as { fetch: typeof fetch }).fetch = (async () => {
+		fetchStarted();
+		return fetchResponse;
+	}) as unknown as typeof fetch;
+	let refreshedStatus!: () => void;
+	const refreshedStatusPromise = new Promise<void>((resolve) => {
+		refreshedStatus = resolve;
+	});
+	const model = { provider: "anthropic", id: "claude-sonnet-4" };
+	const pi = {
+		on(event: string, handler: unknown) {
+			handlers.set(event, handler as CapturedHandler);
+		},
+		registerCommand() {
+			// no-op
+		},
+		sendMessage() {
+			// no-op
+		},
+	} as PiExtensionAPI;
+	quotaStatusExtension(pi);
+	const ctx: PiContext = {
+		ui: {
+			theme: { fg: (_color, text) => text },
+			notify() {
+				// no-op
+			},
+			setStatus(_key, text) {
+				statuses.push(text);
+				if (text?.includes("70%")) refreshedStatus();
+			},
+		},
+		model,
+		modelRegistry: {
+			isUsingOAuth(candidate) {
+				return candidate === model;
+			},
+			async getApiKeyForProvider() {
+				return "oauth-token";
+			},
+		},
+		hasUI: true,
+		mode: "tui",
+	};
+	const sessionStart = handlers.get("session_start");
+	if (!sessionStart) throw new Error("session_start handler was not registered");
+	const startupPromise = Promise.resolve(sessionStart({ reason: "startup" }, ctx));
+	try {
+		await fetchStartedPromise;
+		const startupCompleted = await Promise.race([
+			startupPromise.then(() => true),
+			new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 50)),
+		]);
+		assert.equal(startupCompleted, true);
+		assert.equal(/5h 72%/.test(statuses[0] ?? ""), true);
+
+		releaseFetch({
+			ok: true,
+			status: 200,
+			async json() {
+				return { five_hour: { utilization: 30 } };
+			},
+		});
+		await startupPromise;
+		await refreshedStatusPromise;
+		assert.equal(/5h 70%/.test(statuses.at(-1) ?? ""), true);
+	} finally {
+		releaseFetch({
+			ok: true,
+			status: 200,
+			async json() {
+				return { five_hour: { utilization: 30 } };
+			},
+		});
+		await startupPromise.catch(() => undefined);
+		const shutdown = handlers.get("session_shutdown");
+		if (shutdown) await shutdown({ reason: "test" }, ctx);
+		globalThis.fetch = originalFetch;
+		if (previousDir === undefined) delete process.env.PI_QUOTA_STATUS_DIR;
+		else process.env.PI_QUOTA_STATUS_DIR = previousDir;
+		await rm(dir, { recursive: true, force: true });
+	}
 });
 
 test("/quota status is accepted as table alias", async () => {
