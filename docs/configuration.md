@@ -136,11 +136,11 @@ Generic mappings use named fields only; no user-supplied JavaScript parser funct
 }
 ```
 
-If multiple provider-header dimensions are present, the compact footer uses the most constrained remaining percentage as a single segment. For polled Anthropic and OpenAI Codex subscription quota, the footer shows short and weekly windows together, such as `5h 78% 1:57PM · Wk 30% 8:57AM (28/06)`.
+If multiple provider-header dimensions are present, the compact footer uses the most constrained remaining percentage as a single segment. Native provider observations can display multiple quota windows. For example, OpenAI Codex and Command Code can show `5h 78% 1:57PM · Wk 30% 8:57AM (28/06)`.
 
 ## Manual fallback
 
-When provider headers are absent for a `/login` subscription model, an adapter can declare a fixed-window fallback quota. v1 automatically deducts `turns` after successful provider responses, including internal provider calls that Pi routes through the same response hook.
+When provider headers are absent, an adapter can declare a fixed-window fallback quota. v1 automatically deducts `turns` after successful provider responses, including internal provider calls that Pi routes through the same response hook.
 
 ```json
 {
@@ -156,36 +156,61 @@ When provider headers are absent for a `/login` subscription model, an adapter c
 
 After the reset time passes, fallback observations recompute the next fixed window. Header-only observations are hidden from the footer after their reset time until fresh headers arrive.
 
-## Subscription polling
+## Quota polling
 
-On session start, model selection, `/quota reload`, and every `refreshIntervalMs`, the extension polls known subscription quota sources when Pi can provide an OAuth access token.
+On session start, model selection, `/quota reload`, and every `refreshIntervalMs`, the extension refreshes quota for the active model.
 
-Currently supported poll sources:
+Native poll sources:
 
 - `anthropic` - polls Anthropic's OAuth usage endpoint and maps `five_hour`, `seven_day`, and active-model weekly buckets into quota dimensions. The footer shows `5h` plus the stricter relevant weekly bucket (`Wk`, `Son`, or `Opus`).
 - `openai-codex` - polls the ChatGPT Codex usage endpoint and maps its 5h and weekly windows into quota dimensions. When the OAuth access token contains a ChatGPT account id, the request includes `ChatGPT-Account-Id` to avoid ambiguous account selection.
+- `antigravity` - resolves the credential through Pi's model registry, maps the current Pi thinking level to the provider runtime model, and reads `quotaInfo.remainingFraction` plus `quotaInfo.resetTime` from `/v1internal:fetchAvailableModels`.
+- `commandcode` - resolves the credential through Pi's model registry, calls `/alpha/whoami`, then reads `windowLimits.fiveHour` and `windowLimits.weekly` from `/alpha/billing/credits`.
+- `deepseek` - resolves the API key through Pi's model registry and reads the funded account balance from `/user/balance`.
+- `fireworks` - resolves the Fireworks key and account slug through Pi, then reads recent billed spend from the account billing-summary endpoint.
+- `groq` - resolves the Groq key through Pi and reads five-minute Prometheus request and token rates, rendered as request/minute and token/minute metrics.
+- `huggingface` - resolves the Hugging Face token through Pi and reads monthly inference-provider spend/limit plus ZeroGPU quota when available.
+- `moonshotai` / `moonshotai-cn` - resolves the API key through Pi's model registry and reads the available account balance from `/v1/users/me/balance`.
+- `kimi-coding` - resolves Pi's Kimi credential and reads 5h, weekly, and monthly usage from the coding usage endpoint.
+- `minimax` / `minimax-cn` - resolves the MiniMax API key and reads token-plan remains from `/v1/token_plan/remains`, falling back to `/v1/api/openplatform/coding_plan/remains`.
+- `opencode-go` - resolves the OpenCode API key through Pi's model registry and reads rolling, weekly, and monthly usage from `/zen/go/v1/usage`.
+- `openai` - resolves the OpenAI API key through Pi and attempts the legacy credit-grants endpoint. Access is best-effort because OpenAI does not expose that billing route uniformly to every API account.
+- `openrouter` - resolves the API key through Pi's model registry and reads capped-key quota from `/api/v1/key`, preferring `limit_remaining` and then the usage counter for the key's configured reset window.
+- `xai` - when Pi reports xAI OAuth, sends that OAuth access token to the SuperGrok billing endpoint and maps the current billing period to a quota window. Pi xAI API-key auth is intentionally skipped for this endpoint.
+- `zai` / `zai-coding-cn` - resolves the Z.AI API key through Pi's model registry and reads token, credit, and MCP limits from `/api/monitor/usage/quota/limit`.
+
+Anthropic and OpenAI Codex polling runs when Pi reports `/login` OAuth for the active model. The other native pollers use Pi-resolved provider authentication and do not require OAuth.
+
+### CodexBar reference
+
+CodexBar is reference material for provider coverage, quota endpoints, and display semantics. `pi-quota-status` does not invoke the CodexBar executable and has no CodexBar runtime dependency. Each native poller resolves authentication from Pi and implements only the provider calls needed to produce the extension's normalized quota dimensions.
+
+Provider names alone are not enough to reuse a CodexBar quota endpoint. Some CodexBar integrations depend on a different credential than Pi uses for inference. GitHub Copilot quota needs the raw GitHub OAuth token rather than Pi's derived Copilot service token; Gemini quota uses Gemini CLI OAuth rather than `GEMINI_API_KEY`; Mistral, ordinary OpenCode, Qwen Cloud/Alibaba Token Plan, and Xiaomi MiMo use browser or CLI sessions for billing; Bedrock and Vertex AI use cloud billing credentials. Azure OpenAI's CodexBar integration validates a deployment but does not expose a real usage/quota window. These paths are left unsupported until Pi can supply a credential that is valid for the corresponding quota API.
 
 For OpenAI Codex, a sudden 5h drop from high remaining quota to near-zero is treated as suspicious unless the server explicitly reports a block (`allowed: false`, `limit_reached: true`, or a non-null `rate_limit_reached_type`). This includes drops seen immediately after a 5h window rolls over. If the server simultaneously reports healthy metadata (`allowed: true`, `limit_reached: false`, and no reached type), the extension attempts to reconcile the stale `/wham/usage` value with the local Codex CLI JSON-RPC app server (`codex -s read-only -a untrusted app-server`, `account/rateLimits/read`) when `codex` is available on `PATH`. A successful RPC reconciliation replaces the stale 5h/weekly windows and `/quota debug` reports `codex_rpc=yes`. If RPC is unavailable or also returns near-zero, the near-zero value is kept pending and is not accepted merely because a quick retry repeats it. The extension keeps the last trusted value, stores the suspicious observation as pending, and schedules one quick retry. If a confirmable second poll repeats the near-zero value, it is accepted; if a sane value returns, the pending observation is discarded. `/quota debug` reports this using sanitized fields only.
 
-Polling is conditional on the model being authenticated through `/login`; the config template is not personalized based on which user is logged in. Provider response headers and fallback observations remain supported for other `/login` subscription providers.
+The config template is not personalized based on which user is logged in. Native provider observations, provider response headers, and fallback observations are available to API-key, environment-key, runtime-key, and custom-key models when their provider/model matches the relevant source.
 
 ## UI behavior
 
 - Footer status shows only the active model.
-- API-key, environment-key, runtime-key, and custom-key providers are hidden.
+- Context usage is a peer footer segment and is shown whenever Pi exposes it, even if there is no quota observation.
+- API-key, environment-key, runtime-key, and custom-key providers can show quota from a native provider poller, provider headers, or configured fallback adapters.
 - Subscription models with no quota data show `quota n/a (sub)` plus context usage when available.
+- Non-subscription models with a known quota source but no current observation show `quota n/a` plus context usage; models with no known quota source show context usage by itself.
 - Colors are used only below thresholds: warning below 25%, critical below 10% by default. Multi-window status uses the lowest displayed remaining percentage.
 - Quota polling and countdown refresh run once per minute by default.
 - On HTTP 429 with retry/reset data, the footer shows a compact zero-remaining segment such as `Req 0% 1:57PM`.
 
 ## Privacy notes
 
-The extension stores parsed numbers, reset timestamps, and optional pending suspicious-observation metadata only. It does not persist raw headers, prompts, responses, OAuth tokens, account ids, emails, or API keys.
+The extension stores parsed numbers, reset timestamps, and optional pending suspicious-observation metadata only. It does not persist raw provider payloads, raw headers, prompts, responses, OAuth tokens, account ids, emails, or API keys.
 
 `/quota debug` reports adapter names, model ids, status categories, parsed-dimension counts, and sanitized quota-poll flags, not raw provider payloads.
 
 ## Known limitations
 
 - Providers and transports vary in whether they expose rate-limit headers to Pi extensions.
+- Native account polling currently has provider-specific implementations for Anthropic, OpenAI Codex, Antigravity, Command Code, DeepSeek, Fireworks, Groq, Hugging Face, Moonshot, Kimi Coding, MiniMax, OpenCode Go, OpenAI API, OpenRouter, xAI, and Z.AI. The provider registry is the extension point for additional CodexBar-reference providers that Pi can authenticate.
 - Header naming differs across providers and proxies; use a generic adapter mapping for custom headers.
 - Token/cost fallback units are reserved for later expansion; v1's automatic fallback deduction is turn-based.

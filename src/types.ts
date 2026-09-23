@@ -1,4 +1,10 @@
-export type ObservationSource = "headers" | "429" | "fallback" | "subscription";
+export type ObservationSource =
+	| "headers"
+	| "429"
+	| "fallback"
+	| "subscription"
+	| "provider"
+	| "codexbar";
 export type ConsumptionUnit = "turns" | "tokens" | "costUnits";
 
 export type HeaderNames = string | string[];
@@ -62,6 +68,12 @@ export interface ParsedQuotaDimension {
 	resetAt?: number;
 }
 
+export interface ParsedProviderMetric {
+	name: string;
+	value: number;
+	unit: string;
+}
+
 export interface ParsedExtraQuotaLimit {
 	name: string;
 	usedPercent?: number;
@@ -80,11 +92,17 @@ export interface ParsedQuotaMetadata {
 
 export interface ParsedQuotaObservation {
 	dimensions: ParsedQuotaDimension[];
+	metrics?: ParsedProviderMetric[];
 	resetAt?: number;
 	metadata?: ParsedQuotaMetadata;
 }
 
 export interface QuotaDimensionObservation extends ParsedQuotaDimension {
+	observedAt: number;
+	source: ObservationSource;
+}
+
+export interface ProviderMetricObservation extends ParsedProviderMetric {
 	observedAt: number;
 	source: ObservationSource;
 }
@@ -98,6 +116,7 @@ export interface QuotaObservation {
 	observedAt: number;
 	updatedAt: number;
 	dimensions: QuotaDimensionObservation[];
+	metrics?: ProviderMetricObservation[];
 	metadata?: ParsedQuotaMetadata;
 }
 

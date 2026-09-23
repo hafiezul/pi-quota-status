@@ -120,7 +120,7 @@ test("/quota status explains subscription quota unavailability", async () => {
 	assert.ok(/Context usage: 4\.7%\/272k/.test(messages[0] ?? ""));
 });
 
-test("custom key models clear extension status", async () => {
+test("custom key models show header quota plus context usage", async () => {
 	type CapturedHandler = (
 		event: unknown,
 		ctx: PiContext,
@@ -159,12 +159,11 @@ test("custom key models clear extension status", async () => {
 		},
 		hasUI: true,
 		mode: "tui",
+		getContextUsage() {
+			return { tokens: 12_784, contextWindow: 272_000, percent: 4.7 };
+		},
 	};
 
-	await handlers.get("model_select")?.(
-		{ model, source: "set" } satisfies PiModelSelectEvent,
-		ctx,
-	);
 	await handlers.get("after_provider_response")?.(
 		{
 			status: 200,
@@ -176,7 +175,110 @@ test("custom key models clear extension status", async () => {
 		ctx,
 	);
 
-	assert.deepEqual(statuses, [undefined, undefined]);
+	assert.deepEqual(statuses, ["Req 72% · ctx 4.7%/272k"]);
+});
+
+test("providers without quota data still show context usage", async () => {
+	type CapturedHandler = (
+		event: unknown,
+		ctx: PiContext,
+	) => void | Promise<void>;
+	const handlers = new Map<string, CapturedHandler>();
+	const statuses: Array<string | undefined> = [];
+	const model = { provider: "custom-provider", id: "custom-model" };
+	const pi = {
+		on(event: string, handler: unknown) {
+			handlers.set(event, handler as CapturedHandler);
+		},
+		registerCommand() {
+			// no-op
+		},
+		sendMessage() {
+			// no-op
+		},
+	} as PiExtensionAPI;
+	quotaStatusExtension(pi);
+
+	const ctx: PiContext = {
+		ui: {
+			theme: { fg: (_color, text) => text },
+			notify() {
+				// no-op
+			},
+			setStatus(_key, text) {
+				statuses.push(text);
+			},
+		},
+		model,
+		modelRegistry: {},
+		hasUI: true,
+		mode: "tui",
+		getContextUsage() {
+			return { tokens: 14_000, contextWindow: 1_000_000, percent: 1.4 };
+		},
+	};
+
+	await handlers.get("after_provider_response")?.(
+		{ status: 200, headers: {} } satisfies PiAfterProviderResponseEvent,
+		ctx,
+	);
+
+	assert.deepEqual(statuses, ["ctx 1.4%/1m"]);
+});
+
+test("OAuth-backed native providers are not labeled as subscriptions", async () => {
+	type CapturedHandler = (
+		event: unknown,
+		ctx: PiContext,
+	) => void | Promise<void>;
+	const handlers = new Map<string, CapturedHandler>();
+	const statuses: Array<string | undefined> = [];
+	const model = {
+		provider: "commandcode",
+		id: "meta/muse-spark-1.3-contributor",
+	};
+	const pi = {
+		on(event: string, handler: unknown) {
+			handlers.set(event, handler as CapturedHandler);
+		},
+		registerCommand() {
+			// no-op
+		},
+		sendMessage() {
+			// no-op
+		},
+	} as PiExtensionAPI;
+	quotaStatusExtension(pi);
+
+	const ctx: PiContext = {
+		ui: {
+			theme: { fg: (_color, text) => text },
+			notify() {
+				// no-op
+			},
+			setStatus(_key, text) {
+				statuses.push(text);
+			},
+		},
+		model,
+		modelRegistry: {
+			isUsingOAuth() {
+				return true;
+			},
+		},
+		hasUI: true,
+		mode: "tui",
+		getContextUsage() {
+			return { tokens: 0, contextWindow: 1_000_000, percent: 0 };
+		},
+	};
+
+	await handlers.get("after_provider_response")?.(
+		{ status: 200, headers: {} } satisfies PiAfterProviderResponseEvent,
+		ctx,
+	);
+
+	assert.deepEqual(statuses, ["quota n/a · ctx 0.0%/1m"]);
 });
 
 test("OpenAI Codex subscription usage parses quota windows", () => {

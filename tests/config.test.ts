@@ -15,6 +15,7 @@ import {
 	consumeFallbackQuota,
 	ensureFallbackObservation,
 	selectFooterQuotaForModel,
+	selectProviderMetricForModel,
 	selectQuotaForModel,
 	upsertObservation,
 } from "../src/quota.js";
@@ -718,6 +719,57 @@ test("fallback rows are not synthesized for unobserved models", () => {
 	assert.deepEqual(
 		buildQuotaRows(config, state, [{ provider: "openai", id: "gpt-5.5" }], now),
 		[],
+	);
+});
+
+test("metric-only provider observations stay selectable and render in quota rows", () => {
+	const config = normalizeConfig({ adapters: [] });
+	const state: QuotaState = { version: 1, observations: {} };
+	const ref = { provider: "deepseek", model: "deepseek-chat" };
+	upsertObservation(
+		state,
+		observationFromParsed(
+			ref,
+			{ name: "provider:deepseek", type: "generic" },
+			{
+				dimensions: [],
+				metrics: [{ name: "balance", value: 12.25, unit: "USD" }],
+			},
+			"provider",
+			200,
+			now,
+		),
+	);
+
+	assert.equal(selectProviderMetricForModel(state, config, ref, now)?.value, 12.25);
+	assert.equal(buildQuotaRows(config, state, [], now)[0]?.percent, "$12.25");
+});
+
+test("metric-only provider observations render every provider metric", () => {
+	const config = normalizeConfig({ adapters: [] });
+	const state: QuotaState = { version: 1, observations: {} };
+	const ref = { provider: "groq", model: "llama-test" };
+	upsertObservation(
+		state,
+		observationFromParsed(
+			ref,
+			{ name: "provider:groq", type: "generic" },
+			{
+				dimensions: [],
+				metrics: [
+					{ name: "requests", value: 120, unit: "req/min" },
+					{ name: "tokens", value: 240, unit: "tok/min" },
+				],
+			},
+			"provider",
+			200,
+			now,
+		),
+	);
+
+	assert.deepEqual(
+		buildQuotaRows(config, state, [], now).map((row) => row.percent),
+		["120 req/min", "240 tok/min"],
 	);
 });
 

@@ -1,4 +1,8 @@
-import type { FooterQuotaSegment, QuotaRow } from "./types.js";
+import type {
+	FooterQuotaSegment,
+	ProviderMetricObservation,
+	QuotaRow,
+} from "./types.js";
 
 export function clampPercent(value: number): number {
 	if (!Number.isFinite(value)) return 0;
@@ -17,6 +21,18 @@ export function calculatePercent(
 export function formatPercent(percent: number | undefined): string {
 	if (percent === undefined || Number.isNaN(percent)) return "unknown";
 	return `${Math.floor(clampPercent(percent))}%`;
+}
+
+export function formatProviderMetric(metric: ProviderMetricObservation): string {
+	const value = Math.max(0, metric.value);
+	const unit = metric.unit.toUpperCase();
+	if (unit === "USD") return `$${formatMetricNumber(value)}`;
+	if (unit === "CNY") return `¥${formatMetricNumber(value)}`;
+	if (unit === "EUR") return `€${formatMetricNumber(value)}`;
+	if (unit === "GBP") return `£${formatMetricNumber(value)}`;
+	if (unit === "CREDITS" || unit === "CREDIT")
+		return `${formatMetricNumber(value)} credits`;
+	return `${formatMetricNumber(value)} ${metric.unit}`;
 }
 
 export function formatCountdown(
@@ -145,6 +161,18 @@ export function formatCompactDimensionLabel(name: string): string {
 			return "Out";
 		case "messages":
 			return "Msg";
+		case "daily":
+			return "Day";
+		case "monthly":
+			return "Mo";
+		case "primary":
+			return "Pri";
+		case "secondary":
+			return "Sec";
+		case "tertiary":
+			return "Ter";
+		case "quota":
+			return "quota";
 		default:
 			return compactFallbackLabel(name);
 	}
@@ -208,6 +236,13 @@ function addLocalDays(date: Date, days: number): Date {
 
 function pad(value: string, width: number): string {
 	return value + " ".repeat(Math.max(0, width - value.length));
+}
+
+function formatMetricNumber(value: number): string {
+	return value.toLocaleString("en-US", {
+		minimumFractionDigits: value < 100 ? 2 : 0,
+		maximumFractionDigits: 2,
+	});
 }
 
 export function formatRowsAsTable(rows: QuotaRow[]): string {
