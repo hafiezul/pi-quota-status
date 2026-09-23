@@ -6,6 +6,7 @@ import type {
 	ModelRef,
 	ObservationSource,
 	ParsedQuotaObservation,
+	ProviderMetricObservation,
 	QuotaDimensionObservation,
 	QuotaObservation,
 	QuotaRow,
@@ -18,6 +19,7 @@ import {
 	calculatePercent,
 	formatFreshness,
 	formatPercent,
+	formatProviderMetric,
 	formatResetTime,
 } from "./format.js";
 import { modelKey, parseModelKey, selectAdapter } from "./match.js";
@@ -62,6 +64,11 @@ export function observationFromParsed(
 			source,
 		};
 	});
+	const metrics = parsed.metrics?.map((metric) => ({
+		...metric,
+		observedAt: now,
+		source,
+	}));
 	return {
 		provider: ref.provider,
 		model: ref.model,
@@ -71,6 +78,7 @@ export function observationFromParsed(
 		observedAt: now,
 		updatedAt: now,
 		dimensions,
+		...(metrics && metrics.length > 0 ? { metrics } : {}),
 		...(parsed.metadata ? { metadata: parsed.metadata } : {}),
 	};
 }
@@ -261,6 +269,24 @@ export function selectFooterQuotaForModel(
 	};
 }
 
+export function selectProviderMetricForModel(
+	state: QuotaState,
+	config: QuotaStatusConfig,
+	ref: ModelRef,
+	now = Date.now(),
+): ProviderMetricObservation | undefined {
+	return selectProviderMetricsForModel(state, config, ref, now)[0];
+}
+
+export function selectProviderMetricsForModel(
+	state: QuotaState,
+	config: QuotaStatusConfig,
+	ref: ModelRef,
+	now = Date.now(),
+): ProviderMetricObservation[] {
+	return selectableObservationForModel(state, config, ref, now)?.metrics ?? [];
+}
+
 export function selectMostConstrainedDimension(
 	dimensions: QuotaDimensionObservation[],
 	now = Date.now(),
@@ -293,7 +319,10 @@ function selectFooterDimensionsForObservation(
 	ref: ModelRef,
 	now: number,
 ): QuotaDimensionObservation[] {
-	if (observation.source === "codexbar")
+	if (
+		observation.source === "provider" ||
+		observation.source === "codexbar"
+	)
 		return observation.dimensions.filter(
 			(dimension) =>
 				!dimensionExpired(dimension, now) &&
@@ -435,19 +464,33 @@ export function buildQuotaRows(
 		if (!ref) continue;
 		if (includeModel && !includeModel(ref)) continue;
 		const selected = selectQuotaForModel(state, config, ref, now);
-		if (!selected) continue;
-		rows.push({
-			provider: ref.provider,
-			model: ref.model,
-			percent: formatPercent(selected.percentRemaining),
-			reset:
-				selected.dimension.resetAt === undefined
-					? "unknown"
-					: formatResetTime(selected.dimension.resetAt, now),
-			source: selected.observation.source,
-			dimension: selected.dimension.name,
-			freshness: formatFreshness(selected.dimension.observedAt, now),
-		});
+		if (selected) {
+			rows.push({
+				provider: ref.provider,
+				model: ref.model,
+				percent: formatPercent(selected.percentRemaining),
+				reset:
+					selected.dimension.resetAt === undefined
+						? "unknown"
+						: formatResetTime(selected.dimension.resetAt, now),
+				source: selected.observation.source,
+				dimension: selected.dimension.name,
+				freshness: formatFreshness(selected.dimension.observedAt, now),
+			});
+			continue;
+		}
+		const metrics = selectProviderMetricsForModel(state, config, ref, now);
+		for (const metric of metrics) {
+			rows.push({
+				provider: ref.provider,
+				model: ref.model,
+				percent: formatProviderMetric(metric),
+				reset: "—",
+				source: metric.source,
+				dimension: metric.name,
+				freshness: formatFreshness(metric.observedAt, now),
+			});
+		}
 	}
 	return rows;
 }
@@ -476,7 +519,7 @@ function freshHeaderObservation(
 			(dimension.resetAt === undefined || dimension.resetAt > now) &&
 			!shouldHideCodexHealthyStaleDimension(observation, dimension),
 	);
-	if (dimensions.length === 0) return undefined;
+	if (dimensions.length === 0 && !observation.metrics?.length) return undefined;
 	return { ...observation, dimensions };
 }
 

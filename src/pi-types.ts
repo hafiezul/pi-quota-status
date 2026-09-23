@@ -2,7 +2,31 @@ export interface PiModel {
 	id: string;
 	provider: string;
 	name?: string;
+	thinkingLevelMap?: Record<string, string | null>;
 }
+
+export type PiProviderHeaders = Record<string, string | null>;
+
+export interface PiProviderDescriptor {
+	auth?: {
+		oauth?: {
+			isSubscription?: boolean;
+		};
+	};
+}
+
+export type PiResolvedRequestAuth =
+	| {
+			ok: true;
+			apiKey?: string;
+			headers?: PiProviderHeaders;
+			baseUrl?: string;
+			env?: Record<string, string>;
+	  }
+	| {
+			ok: false;
+			error: string;
+	  };
 
 export interface PiTheme {
 	fg(color: string, text: string): string;
@@ -17,7 +41,9 @@ export interface PiUi {
 export interface PiModelRegistry {
 	getAll?(): PiModel[];
 	find?(provider: string, modelId: string): PiModel | undefined;
+	getProvider?(provider: string): PiProviderDescriptor | undefined;
 	isUsingOAuth?(model: PiModel): boolean;
+	getApiKeyAndHeaders?(model: PiModel): Promise<PiResolvedRequestAuth>;
 	getApiKeyForProvider?(provider: string): Promise<string | undefined>;
 }
 
@@ -33,6 +59,7 @@ export interface PiContext {
 	modelRegistry: PiModelRegistry;
 	hasUI: boolean;
 	mode: "tui" | "rpc" | "json" | "print" | string;
+	thinkingLevel?: string;
 	getContextUsage?(): PiContextUsage | undefined;
 }
 

@@ -7,11 +7,15 @@ import {
 	loadConfig,
 } from "./config.js";
 import {
-	fetchCodexBarQuota,
-	resolveCodexBarProvider,
-} from "./codexbar.js";
-import { formatCompactFooterText, formatRowsAsTable } from "./format.js";
+	formatCompactFooterText,
+	formatProviderMetric,
+	formatRowsAsTable,
+} from "./format.js";
 import { getQuotaStatusPaths, type QuotaStatusPaths } from "./paths.js";
+import {
+	fetchProviderQuota,
+	getProviderQuotaPollerName,
+} from "./provider-quota.js";
 import type {
 	PiAfterProviderResponseEvent,
 	PiCommandContext,
@@ -27,11 +31,15 @@ import {
 	getModelRef,
 	observationFromParsed,
 	selectFooterQuotaForModel,
+	selectProviderMetricsForModel,
 	upsertObservation,
 	type SubscriptionObservationApplyResult,
 } from "./quota.js";
 import { loadState, mergeStateFile } from "./storage.js";
-import { fetchSubscriptionQuota } from "./subscription.js";
+import {
+	fetchSubscriptionQuota,
+	supportsSubscriptionQuotaProvider,
+} from "./subscription.js";
 import type { ModelRef, QuotaState, QuotaStatusConfig } from "./types.js";
 import { modelKey, selectAdapter } from "./match.js";
 
@@ -101,6 +109,21 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 		);
 		const context = formatContextUsage(ctx);
 		if (!selected) {
+			const metrics = selectProviderMetricsForModel(
+				runtime.state,
+				runtime.config,
+				ref,
+			);
+			if (metrics.length > 0) {
+				ctx.ui.setStatus(
+					STATUS_KEY,
+					joinStatusSegments(
+						...metrics.map(formatProviderMetric),
+						context ? `ctx ${context}` : undefined,
+					),
+				);
+				return;
+			}
 			ctx.ui.setStatus(
 				STATUS_KEY,
 				formatUnavailableStatus(runtime.config, ctx, ref, context),
@@ -140,12 +163,12 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 	): Promise<void> {
 		if (!isCurrentSession(generation)) return;
 		let ref: ModelRef;
-		let subscription: boolean;
+		let subscriptionPoll: boolean;
 		try {
 			const candidate = runtime.activeModel ?? getModelRef(ctx.model);
 			if (!candidate) return;
 			ref = candidate;
-			subscription = isUsingSubscription(ctx, candidate);
+			subscriptionPoll = shouldPollSubscriptionQuota(ctx, candidate);
 		} catch (error) {
 			if (isStaleContextError(error) || !isCurrentSession(generation)) return;
 			recordDebug(
@@ -157,7 +180,7 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 		runtime.refreshInFlight = true;
 		const now = Date.now();
 		try {
-			if (subscription) {
+			if (subscriptionPoll) {
 				try {
 					const parsed = await fetchSubscriptionQuota(ctx, ref, now);
 					if (!isCurrentSession(generation)) return;
@@ -200,19 +223,17 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 				}
 			}
 
-			const codexBarProvider = resolveCodexBarProvider(ref.provider, subscription);
-			if (!codexBarProvider) return;
-			const parsed = await fetchCodexBarQuota(ref, subscription);
-			if (!isCurrentSession(generation) || !parsed) return;
+			const providerQuota = await fetchProviderQuota(ctx, ref, now);
+			if (!isCurrentSession(generation) || !providerQuota) return;
 			await mutateState((state) => {
 				const existing = state.observations[modelKey(ref.provider, ref.model)];
 				upsertObservation(
 					state,
 					observationFromParsed(
 						ref,
-						{ name: `codexbar:${codexBarProvider}`, type: "generic" },
-						parsed,
-						"codexbar",
+						{ name: `provider:${providerQuota.poller}`, type: "generic" },
+						providerQuota.parsed,
+						"provider",
 						200,
 						now,
 						existing,
@@ -220,7 +241,7 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 				);
 			});
 			recordDebug(
-				`${ref.provider}/${ref.model}: CodexBar ${codexBarProvider} returned ${parsed.dimensions.length} quota dimension(s)`,
+				`${ref.provider}/${ref.model}: native ${providerQuota.poller} poll returned ${providerQuota.parsed.dimensions.length} quota dimension(s)`,
 			);
 		} catch (error) {
 			if (isStaleContextError(error) || !isCurrentSession(generation)) return;
@@ -445,11 +466,12 @@ function buildDebugReport(runtime: RuntimeState, ctx: PiContext): string {
 		`Matched adapter: ${adapter ? `${adapter.name ?? adapter.type ?? "generic"} (${adapter.type ?? "generic"})` : "none"}`,
 		`Configured adapters: ${runtime.config.adapters?.length ?? 0}`,
 		`State observations: ${Object.keys(runtime.state.observations).length}`,
-		`Subscription auth: ${active ? formatSubscriptionAuth(ctx, active) : "unknown"}`,
-		`CodexBar provider: ${active ? (resolveCodexBarProvider(active.provider, isUsingSubscription(ctx, active)) ?? "none") : "unknown"}`,
+		`OAuth auth: ${active ? formatOAuthAuth(ctx, active) : "unknown"}`,
+		`Subscription-backed: ${active ? (isSubscriptionBacked(ctx, active) ? "yes" : "no") : "unknown"}`,
+		`Native provider poller: ${active ? (getProviderQuotaPollerName(active.provider) ?? "none") : "unknown"}`,
 		`Context usage: ${formatContextUsage(ctx) ?? "unknown"}`,
 	];
-	if (active && isUsingSubscription(ctx, active)) {
+	if (active && shouldPollSubscriptionQuota(ctx, active)) {
 		lines.push(`Quota source: ${formatQuotaSource(runtime, active)}`);
 	}
 	if (runtime.lastErrors.length > 0) {
@@ -500,16 +522,16 @@ function buildUnavailableQuotaMessage(
 		return context
 			? `No tracked quota data yet.\nContext usage: ${context}`
 			: "No tracked quota data yet.";
-	const subscription = isUsingSubscription(ctx, active);
-	const codexBarProvider = resolveCodexBarProvider(active.provider, subscription);
+	const subscription = isSubscriptionBacked(ctx, active);
+	const providerPoller = getProviderQuotaPollerName(active.provider);
 	const adapter = selectAdapter(runtime.config, active.provider, active.model);
-	if (!subscription && !codexBarProvider && !adapter)
+	if (!subscription && !providerPoller && !adapter)
 		return context
 			? `No tracked quota data yet.\nContext usage: ${context}`
 			: "No tracked quota data yet.";
 	return [
 		"No provider quota data for the active model.",
-		"Quota appears after a native subscription poll, CodexBar poll, provider rate-limit headers, or a manual fallback.",
+		"Quota appears after a native provider poll, provider rate-limit headers, or a manual fallback.",
 		context ? `Context usage: ${context}` : undefined,
 	]
 		.filter((line): line is string => Boolean(line))
@@ -522,10 +544,10 @@ function formatUnavailableStatus(
 	ref: ModelRef,
 	context: string | undefined,
 ): string | undefined {
-	const subscription = isUsingSubscription(ctx, ref);
+	const subscription = isSubscriptionBacked(ctx, ref);
 	const hasQuotaSource =
 		subscription ||
-		Boolean(resolveCodexBarProvider(ref.provider, subscription)) ||
+		Boolean(getProviderQuotaPollerName(ref.provider)) ||
 		Boolean(selectAdapter(config, ref.provider, ref.model));
 	const quota = hasQuotaSource
 		? subscription
@@ -535,7 +557,7 @@ function formatUnavailableStatus(
 	return joinStatusSegments(quota, context ? `ctx ${context}` : undefined);
 }
 
-function isUsingSubscription(ctx: PiContext, ref: ModelRef): boolean {
+function isUsingOAuth(ctx: PiContext, ref: ModelRef): boolean {
 	const model = resolveModel(ctx, ref);
 	if (!model) return false;
 	try {
@@ -545,8 +567,25 @@ function isUsingSubscription(ctx: PiContext, ref: ModelRef): boolean {
 	}
 }
 
-function formatSubscriptionAuth(ctx: PiContext, ref: ModelRef): string {
-	return isUsingSubscription(ctx, ref) ? "yes" : "no";
+function isSubscriptionBacked(ctx: PiContext, ref: ModelRef): boolean {
+	if (ref.provider === "kimi-coding") return true;
+	if (!isUsingOAuth(ctx, ref)) return false;
+	try {
+		const declared =
+			ctx.modelRegistry.getProvider?.(ref.provider)?.auth?.oauth?.isSubscription;
+		if (typeof declared === "boolean") return declared;
+	} catch {
+		// Fall through to known native subscription providers.
+	}
+	return supportsSubscriptionQuotaProvider(ref.provider);
+}
+
+function shouldPollSubscriptionQuota(ctx: PiContext, ref: ModelRef): boolean {
+	return supportsSubscriptionQuotaProvider(ref.provider) && isUsingOAuth(ctx, ref);
+}
+
+function formatOAuthAuth(ctx: PiContext, ref: ModelRef): string {
+	return isUsingOAuth(ctx, ref) ? "yes" : "no";
 }
 
 function formatSubscriptionPollDebug(
@@ -603,8 +642,10 @@ function formatQuotaSource(runtime: RuntimeState, ref: ModelRef): string {
 			return "provider 429 response";
 		case "fallback":
 			return "manual fallback estimate";
+		case "provider":
+			return "native provider poll";
 		case "codexbar":
-			return "CodexBar";
+			return "legacy CodexBar observation";
 		default:
 			return "pending subscription poll, provider headers, or fallback";
 	}

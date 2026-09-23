@@ -5,6 +5,7 @@ import {
 	formatCompactFooterText,
 	formatCompactResetTime,
 	formatFooterText,
+	formatProviderMetric,
 	formatResetTime,
 } from "../src/format.js";
 
@@ -16,6 +17,19 @@ test("reset display uses actual local time for same-day resets", () => {
 	assert.equal(
 		formatFooterText(55, resetAt, now),
 		"quota 55% left · reset 4:20 PM",
+	);
+});
+
+test("provider balance metrics render compact currency values", () => {
+	assert.equal(
+		formatProviderMetric({
+			name: "balance",
+			value: 12.5,
+			unit: "USD",
+			observedAt: 0,
+			source: "provider",
+		}),
+		"$12.50",
 	);
 });
 

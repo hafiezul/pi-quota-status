@@ -226,6 +226,61 @@ test("providers without quota data still show context usage", async () => {
 	assert.deepEqual(statuses, ["ctx 1.4%/1m"]);
 });
 
+test("OAuth-backed native providers are not labeled as subscriptions", async () => {
+	type CapturedHandler = (
+		event: unknown,
+		ctx: PiContext,
+	) => void | Promise<void>;
+	const handlers = new Map<string, CapturedHandler>();
+	const statuses: Array<string | undefined> = [];
+	const model = {
+		provider: "commandcode",
+		id: "meta/muse-spark-1.3-contributor",
+	};
+	const pi = {
+		on(event: string, handler: unknown) {
+			handlers.set(event, handler as CapturedHandler);
+		},
+		registerCommand() {
+			// no-op
+		},
+		sendMessage() {
+			// no-op
+		},
+	} as PiExtensionAPI;
+	quotaStatusExtension(pi);
+
+	const ctx: PiContext = {
+		ui: {
+			theme: { fg: (_color, text) => text },
+			notify() {
+				// no-op
+			},
+			setStatus(_key, text) {
+				statuses.push(text);
+			},
+		},
+		model,
+		modelRegistry: {
+			isUsingOAuth() {
+				return true;
+			},
+		},
+		hasUI: true,
+		mode: "tui",
+		getContextUsage() {
+			return { tokens: 0, contextWindow: 1_000_000, percent: 0 };
+		},
+	};
+
+	await handlers.get("after_provider_response")?.(
+		{ status: 200, headers: {} } satisfies PiAfterProviderResponseEvent,
+		ctx,
+	);
+
+	assert.deepEqual(statuses, ["quota n/a · ctx 0.0%/1m"]);
+});
+
 test("OpenAI Codex subscription usage parses quota windows", () => {
 	const parsed = parseOpenAICodexUsage(
 		{

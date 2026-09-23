@@ -30,6 +30,10 @@ const OPENAI_CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const ANTHROPIC_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 const ANTHROPIC_OAUTH_BETA = "oauth-2025-04-20";
 
+export function supportsSubscriptionQuotaProvider(provider: string): boolean {
+	return provider === OPENAI_CODEX_PROVIDER || provider === ANTHROPIC_PROVIDER;
+}
+
 export function extractChatGPTAccountId(token: string): string | undefined {
 	const payload = decodeJwtPayload(token);
 	const authClaim = asRecord(payload?.["https://api.openai.com/auth"]);
@@ -46,11 +50,7 @@ export async function fetchSubscriptionQuota(
 	ref: ModelRef,
 	now = Date.now(),
 ): Promise<ParsedQuotaObservation | undefined> {
-	if (
-		ref.provider !== OPENAI_CODEX_PROVIDER &&
-		ref.provider !== ANTHROPIC_PROVIDER
-	)
-		return undefined;
+	if (!supportsSubscriptionQuotaProvider(ref.provider)) return undefined;
 	const token = await ctx.modelRegistry.getApiKeyForProvider?.(ref.provider);
 	if (!token) return undefined;
 	if (ref.provider === OPENAI_CODEX_PROVIDER)
