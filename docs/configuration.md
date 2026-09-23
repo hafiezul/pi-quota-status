@@ -136,11 +136,11 @@ Generic mappings use named fields only; no user-supplied JavaScript parser funct
 }
 ```
 
-If multiple provider-header dimensions are present, the compact footer uses the most constrained remaining percentage as a single segment. For polled Anthropic and OpenAI Codex subscription quota, the footer shows short and weekly windows together, such as `5h 78% 1:57PM · Wk 30% 8:57AM (28/06)`.
+If multiple provider-header dimensions are present, the compact footer uses the most constrained remaining percentage as a single segment. For polled Anthropic and OpenAI Codex subscription quota, the footer shows short and weekly windows together, such as `5h 78% 1:57PM · Wk 30% 8:57AM (28/06)`. CodexBar observations can display all known core and extra rate windows returned by CodexBar.
 
 ## Manual fallback
 
-When provider headers are absent for a `/login` subscription model, an adapter can declare a fixed-window fallback quota. v1 automatically deducts `turns` after successful provider responses, including internal provider calls that Pi routes through the same response hook.
+When provider headers are absent, an adapter can declare a fixed-window fallback quota. v1 automatically deducts `turns` after successful provider responses, including internal provider calls that Pi routes through the same response hook.
 
 ```json
 {
@@ -156,36 +156,49 @@ When provider headers are absent for a `/login` subscription model, an adapter c
 
 After the reset time passes, fallback observations recompute the next fixed window. Header-only observations are hidden from the footer after their reset time until fresh headers arrive.
 
-## Subscription polling
+## Quota polling
 
-On session start, model selection, `/quota reload`, and every `refreshIntervalMs`, the extension polls known subscription quota sources when Pi can provide an OAuth access token.
+On session start, model selection, `/quota reload`, and every `refreshIntervalMs`, the extension refreshes quota for the active model.
 
-Currently supported poll sources:
+Native subscription poll sources:
 
 - `anthropic` - polls Anthropic's OAuth usage endpoint and maps `five_hour`, `seven_day`, and active-model weekly buckets into quota dimensions. The footer shows `5h` plus the stricter relevant weekly bucket (`Wk`, `Son`, or `Opus`).
 - `openai-codex` - polls the ChatGPT Codex usage endpoint and maps its 5h and weekly windows into quota dimensions. When the OAuth access token contains a ChatGPT account id, the request includes `ChatGPT-Account-Id` to avoid ambiguous account selection.
 
+These native endpoints are used only when Pi reports `/login` OAuth for the active model. When native subscription polling cannot produce an observation, or for other mapped providers, the extension probes the `codexbar` executable if it is available on `PATH`.
+
+### CodexBar polling
+
+The CodexBar bridge mirrors all 80 provider ids in the current CodexBar registry and translates provider ids that use a different CLI spelling, such as `azureopenai` → `azure-openai`, `alibaba` → `alibaba-coding-plan`, `qwencloud` → `qwen-cloud`, `abacus` → `abacusai`, and `groq` → `groqcloud`. It also maps common Pi provider ids such as `openai-codex`, `anthropic`, `google`, `google-vertex`, `github-copilot`, `amazon-bedrock`, `opencode-go`, Qwen token-plan ids, and Xiaomi token-plan ids.
+
+Each poll runs `codexbar usage --provider <name> --format json`. CodexBar owns credential and cookie discovery; `pi-quota-status` does not send Pi OAuth tokens, API keys, prompts, or responses to the process. The parser consumes CodexBar's normalized primary/secondary/tertiary windows, semantic window labels, and known `extraRateWindows`. Synthetic placeholder windows and extra windows marked `usageKnown: false` are ignored.
+
+CodexBar is optional. If the executable is missing, the provider is unsupported by the locally installed CodexBar version, or CodexBar cannot obtain credentials, polling simply produces no CodexBar observation and other quota sources continue to work. The set of providers accepted by the executable can vary by CodexBar version.
+
 For OpenAI Codex, a sudden 5h drop from high remaining quota to near-zero is treated as suspicious unless the server explicitly reports a block (`allowed: false`, `limit_reached: true`, or a non-null `rate_limit_reached_type`). This includes drops seen immediately after a 5h window rolls over. If the server simultaneously reports healthy metadata (`allowed: true`, `limit_reached: false`, and no reached type), the extension attempts to reconcile the stale `/wham/usage` value with the local Codex CLI JSON-RPC app server (`codex -s read-only -a untrusted app-server`, `account/rateLimits/read`) when `codex` is available on `PATH`. A successful RPC reconciliation replaces the stale 5h/weekly windows and `/quota debug` reports `codex_rpc=yes`. If RPC is unavailable or also returns near-zero, the near-zero value is kept pending and is not accepted merely because a quick retry repeats it. The extension keeps the last trusted value, stores the suspicious observation as pending, and schedules one quick retry. If a confirmable second poll repeats the near-zero value, it is accepted; if a sane value returns, the pending observation is discarded. `/quota debug` reports this using sanitized fields only.
 
-Polling is conditional on the model being authenticated through `/login`; the config template is not personalized based on which user is logged in. Provider response headers and fallback observations remain supported for other `/login` subscription providers.
+The config template is not personalized based on which user is logged in. Provider response headers, CodexBar observations, and fallback observations are also available to API-key, environment-key, runtime-key, and custom-key models when their provider/model matches the relevant source.
 
 ## UI behavior
 
 - Footer status shows only the active model.
-- API-key, environment-key, runtime-key, and custom-key providers are hidden.
+- Context usage is a peer footer segment and is shown whenever Pi exposes it, even if there is no quota observation.
+- API-key, environment-key, runtime-key, and custom-key providers can show quota from CodexBar, provider headers, or configured fallback adapters.
 - Subscription models with no quota data show `quota n/a (sub)` plus context usage when available.
+- Non-subscription models with a known quota source but no current observation show `quota n/a` plus context usage; models with no known quota source show context usage by itself.
 - Colors are used only below thresholds: warning below 25%, critical below 10% by default. Multi-window status uses the lowest displayed remaining percentage.
 - Quota polling and countdown refresh run once per minute by default.
 - On HTTP 429 with retry/reset data, the footer shows a compact zero-remaining segment such as `Req 0% 1:57PM`.
 
 ## Privacy notes
 
-The extension stores parsed numbers, reset timestamps, and optional pending suspicious-observation metadata only. It does not persist raw headers, prompts, responses, OAuth tokens, account ids, emails, or API keys.
+The extension stores parsed numbers, reset timestamps, and optional pending suspicious-observation metadata only. It does not persist raw headers, raw CodexBar payloads, prompts, responses, OAuth tokens, account ids, emails, or API keys.
 
 `/quota debug` reports adapter names, model ids, status categories, parsed-dimension counts, and sanitized quota-poll flags, not raw provider payloads.
 
 ## Known limitations
 
 - Providers and transports vary in whether they expose rate-limit headers to Pi extensions.
+- CodexBar provider availability and credential discovery depend on the separately installed CodexBar version and configuration.
 - Header naming differs across providers and proxies; use a generic adapter mapping for custom headers.
 - Token/cost fallback units are reserved for later expansion; v1's automatic fallback deduction is turn-based.

@@ -293,6 +293,12 @@ function selectFooterDimensionsForObservation(
 	ref: ModelRef,
 	now: number,
 ): QuotaDimensionObservation[] {
+	if (observation.source === "codexbar")
+		return observation.dimensions.filter(
+			(dimension) =>
+				!dimensionExpired(dimension, now) &&
+				calculatePercent(dimension.remaining, dimension.limit) !== undefined,
+		);
 	if (observation.source !== "subscription") {
 		const selected = selectMostConstrainedDimension(
 			observation.dimensions,

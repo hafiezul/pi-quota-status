@@ -1,10 +1,15 @@
 import { parseQuotaHeaders } from "./adapters.js";
 import {
+	DEFAULT_CONFIG,
 	DEFAULT_CRITICAL_THRESHOLD,
 	DEFAULT_WARNING_THRESHOLD,
 	ensureConfigTemplate,
 	loadConfig,
 } from "./config.js";
+import {
+	fetchCodexBarQuota,
+	resolveCodexBarProvider,
+} from "./codexbar.js";
 import { formatCompactFooterText, formatRowsAsTable } from "./format.js";
 import { getQuotaStatusPaths, type QuotaStatusPaths } from "./paths.js";
 import type {
@@ -50,7 +55,7 @@ interface RuntimeState {
 export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 	const runtime: RuntimeState = {
 		paths: getQuotaStatusPaths(),
-		config: {},
+		config: DEFAULT_CONFIG,
 		state: { version: 1, observations: {} },
 		lastErrors: [],
 		debug: [],
@@ -89,26 +94,29 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 			ctx.ui.setStatus(STATUS_KEY, undefined);
 			return;
 		}
-		if (!isUsingSubscription(ctx, ref)) {
-			ctx.ui.setStatus(STATUS_KEY, undefined);
-			return;
-		}
 		const selected = selectFooterQuotaForModel(
 			runtime.state,
 			runtime.config,
 			ref,
 		);
+		const context = formatContextUsage(ctx);
 		if (!selected) {
 			ctx.ui.setStatus(
 				STATUS_KEY,
-				formatUnavailableSubscriptionStatus(ctx, ref),
+				formatUnavailableStatus(runtime.config, ctx, ref, context),
 			);
 			return;
 		}
-		const text = formatCompactFooterText(selected.segments, Date.now());
+		const quotaText = formatCompactFooterText(selected.segments, Date.now());
+		const coloredQuota = colorByThreshold(
+			ctx,
+			runtime.config,
+			quotaText,
+			selected.percentRemaining,
+		);
 		ctx.ui.setStatus(
 			STATUS_KEY,
-			colorByThreshold(ctx, runtime.config, text, selected.percentRemaining),
+			joinStatusSegments(coloredQuota, context ? `ctx ${context}` : undefined),
 		);
 	}
 
@@ -126,20 +134,22 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 		}
 	}
 
-	async function refreshSubscriptionQuota(
+	async function refreshQuota(
 		ctx: PiContext,
 		generation: number,
 	): Promise<void> {
 		if (!isCurrentSession(generation)) return;
 		let ref: ModelRef;
+		let subscription: boolean;
 		try {
 			const candidate = runtime.activeModel ?? getModelRef(ctx.model);
-			if (!candidate || !isUsingSubscription(ctx, candidate)) return;
+			if (!candidate) return;
 			ref = candidate;
+			subscription = isUsingSubscription(ctx, candidate);
 		} catch (error) {
 			if (isStaleContextError(error) || !isCurrentSession(generation)) return;
 			recordDebug(
-				`subscription quota preflight failed: ${errorToString(error)}`,
+				`quota preflight failed: ${errorToString(error)}`,
 			);
 			return;
 		}
@@ -147,31 +157,75 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 		runtime.refreshInFlight = true;
 		const now = Date.now();
 		try {
-			const parsed = await fetchSubscriptionQuota(ctx, ref, now);
+			if (subscription) {
+				try {
+					const parsed = await fetchSubscriptionQuota(ctx, ref, now);
+					if (!isCurrentSession(generation)) return;
+					if (parsed) {
+						let applyResult: SubscriptionObservationApplyResult | undefined;
+						await mutateState((state) => {
+							const existing =
+								state.observations[modelKey(ref.provider, ref.model)];
+							const observation = observationFromParsed(
+								ref,
+								{ name: "subscription", type: "generic" },
+								parsed,
+								"subscription",
+								200,
+								now,
+								existing,
+							);
+							applyResult = applySubscriptionObservation(
+								state,
+								observation,
+								now,
+							);
+						});
+						recordDebug(
+							formatSubscriptionPollDebug(
+								ref,
+								parsed.dimensions.length,
+								applyResult,
+							),
+						);
+						if (applyResult?.retryRecommended)
+							scheduleQuickRetry(ctx, generation);
+						return;
+					}
+				} catch (error) {
+					if (isStaleContextError(error) || !isCurrentSession(generation)) return;
+					recordDebug(
+						`${ref.provider}/${ref.model}: native subscription poll failed: ${errorToString(error)}`,
+					);
+				}
+			}
+
+			const codexBarProvider = resolveCodexBarProvider(ref.provider, subscription);
+			if (!codexBarProvider) return;
+			const parsed = await fetchCodexBarQuota(ref, subscription);
 			if (!isCurrentSession(generation) || !parsed) return;
-			let applyResult: SubscriptionObservationApplyResult | undefined;
 			await mutateState((state) => {
 				const existing = state.observations[modelKey(ref.provider, ref.model)];
-				const observation = observationFromParsed(
-					ref,
-					{ name: "subscription", type: "generic" },
-					parsed,
-					"subscription",
-					200,
-					now,
-					existing,
+				upsertObservation(
+					state,
+					observationFromParsed(
+						ref,
+						{ name: `codexbar:${codexBarProvider}`, type: "generic" },
+						parsed,
+						"codexbar",
+						200,
+						now,
+						existing,
+					),
 				);
-				applyResult = applySubscriptionObservation(state, observation, now);
 			});
-			if (!isCurrentSession(generation)) return;
 			recordDebug(
-				formatSubscriptionPollDebug(ref, parsed.dimensions.length, applyResult),
+				`${ref.provider}/${ref.model}: CodexBar ${codexBarProvider} returned ${parsed.dimensions.length} quota dimension(s)`,
 			);
-			if (applyResult?.retryRecommended) scheduleQuickRetry(ctx, generation);
 		} catch (error) {
 			if (isStaleContextError(error) || !isCurrentSession(generation)) return;
 			recordDebug(
-				`${ref.provider}/${ref.model}: subscription quota poll failed: ${errorToString(error)}`,
+				`${ref.provider}/${ref.model}: quota poll failed: ${errorToString(error)}`,
 			);
 		} finally {
 			runtime.refreshInFlight = false;
@@ -183,7 +237,7 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 		generation: number,
 	): Promise<void> {
 		if (!isCurrentSession(generation)) return;
-		await refreshSubscriptionQuota(ctx, generation);
+		await refreshQuota(ctx, generation);
 		safeUpdateStatus(ctx, generation);
 	}
 
@@ -250,10 +304,6 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 				const candidate = runtime.activeModel ?? getModelRef(ctx.model);
 				if (!candidate) return;
 				ref = candidate;
-				if (!isUsingSubscription(ctx, ref)) {
-					safeUpdateStatus(ctx, generation);
-					return;
-				}
 			} catch (error) {
 				if (isStaleContextError(error) || !isCurrentSession(generation)) return;
 				recordDebug(
@@ -377,13 +427,7 @@ async function handleConfigCommand(
 
 function buildQuotaTable(runtime: RuntimeState, ctx: PiContext): string {
 	const models = getKnownModels(ctx);
-	const rows = buildQuotaRows(
-		runtime.config,
-		runtime.state,
-		models,
-		Date.now(),
-		(ref) => isUsingSubscription(ctx, ref),
-	);
+	const rows = buildQuotaRows(runtime.config, runtime.state, models, Date.now());
 	if (rows.length > 0) return formatRowsAsTable(rows);
 	return buildUnavailableQuotaMessage(runtime, ctx);
 }
@@ -402,6 +446,7 @@ function buildDebugReport(runtime: RuntimeState, ctx: PiContext): string {
 		`Configured adapters: ${runtime.config.adapters?.length ?? 0}`,
 		`State observations: ${Object.keys(runtime.state.observations).length}`,
 		`Subscription auth: ${active ? formatSubscriptionAuth(ctx, active) : "unknown"}`,
+		`CodexBar provider: ${active ? (resolveCodexBarProvider(active.provider, isUsingSubscription(ctx, active)) ?? "none") : "unknown"}`,
 		`Context usage: ${formatContextUsage(ctx) ?? "unknown"}`,
 	];
 	if (active && isUsingSubscription(ctx, active)) {
@@ -450,26 +495,44 @@ function buildUnavailableQuotaMessage(
 	ctx: PiContext,
 ): string {
 	const active = runtime.activeModel ?? getModelRef(ctx.model);
-	if (active && isUsingSubscription(ctx, active)) {
-		const context = formatContextUsage(ctx);
-		return [
-			"No provider quota data for the active subscription model.",
-			"Quota appears after a successful subscription poll, provider rate-limit headers, or a manual fallback.",
-			context ? `Context usage: ${context}` : undefined,
-		]
-			.filter((line): line is string => Boolean(line))
-			.join("\n");
-	}
-	return "No tracked quota data yet.";
+	const context = formatContextUsage(ctx);
+	if (!active)
+		return context
+			? `No tracked quota data yet.\nContext usage: ${context}`
+			: "No tracked quota data yet.";
+	const subscription = isUsingSubscription(ctx, active);
+	const codexBarProvider = resolveCodexBarProvider(active.provider, subscription);
+	const adapter = selectAdapter(runtime.config, active.provider, active.model);
+	if (!subscription && !codexBarProvider && !adapter)
+		return context
+			? `No tracked quota data yet.\nContext usage: ${context}`
+			: "No tracked quota data yet.";
+	return [
+		"No provider quota data for the active model.",
+		"Quota appears after a native subscription poll, CodexBar poll, provider rate-limit headers, or a manual fallback.",
+		context ? `Context usage: ${context}` : undefined,
+	]
+		.filter((line): line is string => Boolean(line))
+		.join("\n");
 }
 
-function formatUnavailableSubscriptionStatus(
+function formatUnavailableStatus(
+	config: QuotaStatusConfig,
 	ctx: PiContext,
 	ref: ModelRef,
+	context: string | undefined,
 ): string | undefined {
-	if (!isUsingSubscription(ctx, ref)) return undefined;
-	const context = formatContextUsage(ctx);
-	return context ? `quota n/a (sub) · ctx ${context}` : "quota n/a (sub)";
+	const subscription = isUsingSubscription(ctx, ref);
+	const hasQuotaSource =
+		subscription ||
+		Boolean(resolveCodexBarProvider(ref.provider, subscription)) ||
+		Boolean(selectAdapter(config, ref.provider, ref.model));
+	const quota = hasQuotaSource
+		? subscription
+			? "quota n/a (sub)"
+			: "quota n/a"
+		: undefined;
+	return joinStatusSegments(quota, context ? `ctx ${context}` : undefined);
 }
 
 function isUsingSubscription(ctx: PiContext, ref: ModelRef): boolean {
@@ -540,9 +603,18 @@ function formatQuotaSource(runtime: RuntimeState, ref: ModelRef): string {
 			return "provider 429 response";
 		case "fallback":
 			return "manual fallback estimate";
+		case "codexbar":
+			return "CodexBar";
 		default:
 			return "pending subscription poll, provider headers, or fallback";
 	}
+}
+
+function joinStatusSegments(
+	...segments: Array<string | undefined>
+): string | undefined {
+	const visible = segments.filter((segment): segment is string => Boolean(segment));
+	return visible.length > 0 ? visible.join(" · ") : undefined;
 }
 
 function resolveModel(ctx: PiContext, ref: ModelRef): PiModel | undefined {

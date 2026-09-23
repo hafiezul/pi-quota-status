@@ -145,6 +145,16 @@ export function formatCompactDimensionLabel(name: string): string {
 			return "Out";
 		case "messages":
 			return "Msg";
+		case "daily":
+			return "Day";
+		case "monthly":
+			return "Mo";
+		case "primary":
+			return "Pri";
+		case "secondary":
+			return "Sec";
+		case "tertiary":
+			return "Ter";
 		default:
 			return compactFallbackLabel(name);
 	}
