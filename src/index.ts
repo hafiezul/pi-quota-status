@@ -283,7 +283,7 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 		if (!isCurrentSession(generation)) return;
 		runtime.activeModel = getModelRef(ctx.model);
 		safeUpdateStatus(ctx, generation);
-		await refreshAndUpdateStatus(ctx, generation);
+		refreshAndUpdateStatusInBackground(ctx, generation);
 		if (!isCurrentSession(generation)) return;
 		runtime.refreshTimer = setInterval(() => {
 			refreshAndUpdateStatusInBackground(ctx, generation);
