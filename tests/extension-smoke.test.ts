@@ -294,6 +294,22 @@ test("OpenAI Codex subscription usage parses quota windows", () => {
 	assert.equal(parsed?.dimensions[1]?.remaining, 35);
 });
 
+test("OpenAI Codex subscription treats used_percent 1 as one percent used", () => {
+	const parsed = parseOpenAICodexUsage(
+		{
+			rate_limit: {
+				secondary_window: {
+					used_percent: 1,
+				},
+			},
+		},
+		Date.UTC(2026, 0, 1, 0, 0, 0),
+	);
+
+	assert.equal(parsed?.dimensions[0]?.name, "weekly");
+	assert.equal(parsed?.dimensions[0]?.remaining, 99);
+});
+
 test("OpenAI Codex subscription usage parses block metadata and extra limits", () => {
 	const parsed = parseOpenAICodexUsage(
 		{
