@@ -194,10 +194,9 @@ The config template is not personalized based on which user is logged in. Native
 ## UI behavior
 
 - Footer status shows only the active model.
-- Context usage is a peer footer segment and is shown whenever Pi exposes it, even if there is no quota observation.
 - API-key, environment-key, runtime-key, and custom-key providers can show quota from a native provider poller, provider headers, or configured fallback adapters.
-- Subscription models with no quota data show `quota n/a (sub)` plus context usage when available.
-- Non-subscription models with a known quota source but no current observation show `quota n/a` plus context usage; models with no known quota source show context usage by itself.
+- Subscription models with no quota data show `quota n/a (sub)`.
+- Non-subscription models with a known quota source but no current observation show `quota n/a`; models with no known quota source do not add a footer segment.
 - Colors are used only below thresholds: warning below 25%, critical below 10% by default. Multi-window status uses the lowest displayed remaining percentage.
 - Quota polling and countdown refresh run once per minute by default.
 - On HTTP 429 with retry/reset data, the footer shows a compact zero-remaining segment such as `Req 0% 1:57PM`.

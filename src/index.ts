@@ -107,7 +107,6 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 			runtime.config,
 			ref,
 		);
-		const context = formatContextUsage(ctx);
 		if (!selected) {
 			const metrics = selectProviderMetricsForModel(
 				runtime.state,
@@ -117,16 +116,13 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 			if (metrics.length > 0) {
 				ctx.ui.setStatus(
 					STATUS_KEY,
-					joinStatusSegments(
-						...metrics.map(formatProviderMetric),
-						context ? `ctx ${context}` : undefined,
-					),
+					metrics.map(formatProviderMetric).join(" · "),
 				);
 				return;
 			}
 			ctx.ui.setStatus(
 				STATUS_KEY,
-				formatUnavailableStatus(runtime.config, ctx, ref, context),
+				formatUnavailableStatus(runtime.config, ctx, ref),
 			);
 			return;
 		}
@@ -137,10 +133,7 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 			quotaText,
 			selected.percentRemaining,
 		);
-		ctx.ui.setStatus(
-			STATUS_KEY,
-			joinStatusSegments(coloredQuota, context ? `ctx ${context}` : undefined),
-		);
+		ctx.ui.setStatus(STATUS_KEY, coloredQuota);
 	}
 
 	function isCurrentSession(generation: number): boolean {
@@ -469,7 +462,6 @@ function buildDebugReport(runtime: RuntimeState, ctx: PiContext): string {
 		`OAuth auth: ${active ? formatOAuthAuth(ctx, active) : "unknown"}`,
 		`Subscription-backed: ${active ? (isSubscriptionBacked(ctx, active) ? "yes" : "no") : "unknown"}`,
 		`Native provider poller: ${active ? (getProviderQuotaPollerName(active.provider) ?? "none") : "unknown"}`,
-		`Context usage: ${formatContextUsage(ctx) ?? "unknown"}`,
 	];
 	if (active && shouldPollSubscriptionQuota(ctx, active)) {
 		lines.push(`Quota source: ${formatQuotaSource(runtime, active)}`);
@@ -517,32 +509,22 @@ function buildUnavailableQuotaMessage(
 	ctx: PiContext,
 ): string {
 	const active = runtime.activeModel ?? getModelRef(ctx.model);
-	const context = formatContextUsage(ctx);
-	if (!active)
-		return context
-			? `No tracked quota data yet.\nContext usage: ${context}`
-			: "No tracked quota data yet.";
+	if (!active) return "No tracked quota data yet.";
 	const subscription = isSubscriptionBacked(ctx, active);
 	const providerPoller = getProviderQuotaPollerName(active.provider);
 	const adapter = selectAdapter(runtime.config, active.provider, active.model);
 	if (!subscription && !providerPoller && !adapter)
-		return context
-			? `No tracked quota data yet.\nContext usage: ${context}`
-			: "No tracked quota data yet.";
+		return "No tracked quota data yet.";
 	return [
 		"No provider quota data for the active model.",
 		"Quota appears after a native provider poll, provider rate-limit headers, or a manual fallback.",
-		context ? `Context usage: ${context}` : undefined,
-	]
-		.filter((line): line is string => Boolean(line))
-		.join("\n");
+	].join("\n");
 }
 
 function formatUnavailableStatus(
 	config: QuotaStatusConfig,
 	ctx: PiContext,
 	ref: ModelRef,
-	context: string | undefined,
 ): string | undefined {
 	const subscription = isSubscriptionBacked(ctx, ref);
 	const hasQuotaSource =
@@ -554,7 +536,7 @@ function formatUnavailableStatus(
 			? "quota n/a (sub)"
 			: "quota n/a"
 		: undefined;
-	return joinStatusSegments(quota, context ? `ctx ${context}` : undefined);
+	return quota;
 }
 
 function isUsingOAuth(ctx: PiContext, ref: ModelRef): boolean {
@@ -651,13 +633,6 @@ function formatQuotaSource(runtime: RuntimeState, ref: ModelRef): string {
 	}
 }
 
-function joinStatusSegments(
-	...segments: Array<string | undefined>
-): string | undefined {
-	const visible = segments.filter((segment): segment is string => Boolean(segment));
-	return visible.length > 0 ? visible.join(" · ") : undefined;
-}
-
 function resolveModel(ctx: PiContext, ref: ModelRef): PiModel | undefined {
 	if (ctx.model?.provider === ref.provider && ctx.model.id === ref.model)
 		return ctx.model;
@@ -666,25 +641,6 @@ function resolveModel(ctx: PiContext, ref: ModelRef): PiModel | undefined {
 	} catch {
 		return undefined;
 	}
-}
-
-function formatContextUsage(ctx: PiContext): string | undefined {
-	const usage = ctx.getContextUsage?.();
-	if (!usage || usage.contextWindow <= 0) return undefined;
-	const percent = usage.percent === null ? "?" : `${usage.percent.toFixed(1)}%`;
-	return `${percent}/${formatTokenCount(usage.contextWindow)}`;
-}
-
-function formatTokenCount(value: number): string {
-	if (!Number.isFinite(value)) return "0";
-	const abs = Math.abs(value);
-	if (abs >= 1_000_000) return `${trimDecimal(value / 1_000_000)}m`;
-	if (abs >= 1_000) return `${Math.round(value / 1_000)}k`;
-	return `${Math.round(value)}`;
-}
-
-function trimDecimal(value: number): string {
-	return value.toFixed(1).replace(/\.0$/, "");
 }
 
 function isStaleContextError(error: unknown): boolean {
