@@ -259,7 +259,7 @@ function parseCodexWindow(
 	now: number,
 ): ParsedQuotaDimension | undefined {
 	if (!window) return undefined;
-	const usedPercent = normalizedUsedPercent(
+	const usedPercent = numberValue(
 		window.used_percent ?? window.usedPercent ?? window.used,
 	);
 	if (usedPercent === undefined) return undefined;
