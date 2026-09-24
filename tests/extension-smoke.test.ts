@@ -111,16 +111,12 @@ test("/quota status explains subscription quota unavailability", async () => {
 		},
 		hasUI: true,
 		mode: "tui",
-		getContextUsage() {
-			return { tokens: 12_784, contextWindow: 272_000, percent: 4.7 };
-		},
 	});
 
 	assert.ok(/No provider quota data/.test(messages[0] ?? ""));
-	assert.ok(/Context usage: 4\.7%\/272k/.test(messages[0] ?? ""));
 });
 
-test("custom key models show header quota plus context usage", async () => {
+test("custom key models show header quota", async () => {
 	type CapturedHandler = (
 		event: unknown,
 		ctx: PiContext,
@@ -159,9 +155,6 @@ test("custom key models show header quota plus context usage", async () => {
 		},
 		hasUI: true,
 		mode: "tui",
-		getContextUsage() {
-			return { tokens: 12_784, contextWindow: 272_000, percent: 4.7 };
-		},
 	};
 
 	await handlers.get("after_provider_response")?.(
@@ -175,10 +168,10 @@ test("custom key models show header quota plus context usage", async () => {
 		ctx,
 	);
 
-	assert.deepEqual(statuses, ["Req 72% · ctx 4.7%/272k"]);
+	assert.deepEqual(statuses, ["Req 72%"]);
 });
 
-test("providers without quota data still show context usage", async () => {
+test("providers without quota data clear extension status", async () => {
 	type CapturedHandler = (
 		event: unknown,
 		ctx: PiContext,
@@ -213,9 +206,6 @@ test("providers without quota data still show context usage", async () => {
 		modelRegistry: {},
 		hasUI: true,
 		mode: "tui",
-		getContextUsage() {
-			return { tokens: 14_000, contextWindow: 1_000_000, percent: 1.4 };
-		},
 	};
 
 	await handlers.get("after_provider_response")?.(
@@ -223,7 +213,7 @@ test("providers without quota data still show context usage", async () => {
 		ctx,
 	);
 
-	assert.deepEqual(statuses, ["ctx 1.4%/1m"]);
+	assert.deepEqual(statuses, [undefined]);
 });
 
 test("OAuth-backed native providers are not labeled as subscriptions", async () => {
@@ -268,9 +258,6 @@ test("OAuth-backed native providers are not labeled as subscriptions", async () 
 		},
 		hasUI: true,
 		mode: "tui",
-		getContextUsage() {
-			return { tokens: 0, contextWindow: 1_000_000, percent: 0 };
-		},
 	};
 
 	await handlers.get("after_provider_response")?.(
@@ -278,7 +265,7 @@ test("OAuth-backed native providers are not labeled as subscriptions", async () 
 		ctx,
 	);
 
-	assert.deepEqual(statuses, ["quota n/a · ctx 0.0%/1m"]);
+	assert.deepEqual(statuses, ["quota n/a"]);
 });
 
 test("OpenAI Codex subscription usage parses quota windows", () => {

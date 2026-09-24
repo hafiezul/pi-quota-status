@@ -47,12 +47,6 @@ export interface PiModelRegistry {
 	getApiKeyForProvider?(provider: string): Promise<string | undefined>;
 }
 
-export interface PiContextUsage {
-	tokens: number | null;
-	contextWindow: number;
-	percent: number | null;
-}
-
 export interface PiContext {
 	ui: PiUi;
 	model?: PiModel;
@@ -60,7 +54,6 @@ export interface PiContext {
 	hasUI: boolean;
 	mode: "tui" | "rpc" | "json" | "print" | string;
 	thinkingLevel?: string;
-	getContextUsage?(): PiContextUsage | undefined;
 }
 
 export interface PiCommandContext extends PiContext {

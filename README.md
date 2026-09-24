@@ -3,10 +3,10 @@
 [![npm version](https://img.shields.io/npm/v/pi-quota-status.svg)](https://www.npmjs.com/package/pi-quota-status)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-`pi-quota-status` is a Pi extension package that adds compact provider quota/reset information and active context-window usage beside Pi's default footer statusline.
+`pi-quota-status` is a Pi extension package that adds compact provider quota/reset information beside Pi's default footer statusline.
 
 ```text
-5h 78% 1:57PM · Wk 30% 8:57AM (28/06) · ctx 4.7%/272k
+5h 78% 1:57PM · Wk 30% 8:57AM (28/06)
 ```
 
 It uses its own `ctx.ui.setStatus("pi-quota-status", ...)` slot, so Pi's default footer stays intact.
@@ -106,10 +106,9 @@ Read the [configuration reference](docs/configuration.md) for:
 ## UI behavior
 
 - Footer status shows only the active model.
-- Context usage is shown whenever Pi exposes it, even when no quota source is available.
 - API-key, environment-key, runtime-key, and custom-key providers can show quota from a native provider poller, provider headers, or configured fallback adapters.
-- Subscription models with no quota data show `quota n/a (sub)` plus context usage when available.
-- Non-subscription models with a known quota source but no current data show `quota n/a`; models with no quota source show only the context segment.
+- Subscription models with no quota data show `quota n/a (sub)`.
+- Non-subscription models with a known quota source but no current data show `quota n/a`; models with no quota source do not add a footer segment.
 - Colors are used only below thresholds: warning below 25%, critical below 10% by default. Multi-window status uses the lowest displayed remaining percentage.
 - Quota polling and countdown refresh run once per minute by default.
 - On HTTP 429 with retry/reset data, the footer shows a compact zero-remaining segment such as `Req 0% 1:57PM`.
