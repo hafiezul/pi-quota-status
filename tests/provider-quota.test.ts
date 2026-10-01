@@ -19,7 +19,8 @@ import {
 	parseXaiSubscriptionBilling,
 	parseZaiQuota,
 } from "../src/provider-quota.js";
-import type { PiContext, PiModel } from "../src/pi-types.js";
+import { stubCtx } from "./helpers.js";
+import type { PiModel } from "../src/pi-types.js";
 
 test("native provider registry exposes supported Pi provider pollers", () => {
 	assert.equal(getProviderQuotaPollerName("antigravity"), "antigravity");
@@ -433,12 +434,16 @@ test("provider polling uses Pi-resolved Antigravity auth and thinking level", as
 			{ status: 200, headers: { "content-type": "application/json" } },
 		);
 	};
-	const ctx = contextFor(model, {
-		async getApiKeyAndHeaders() {
-			return {
-				ok: true,
-				apiKey: JSON.stringify({ token: "ag-token", projectId: "project-123" }),
-			};
+	const ctx = stubCtx({
+		model,
+		modelRegistry: {
+			find: () => model,
+			async getApiKeyAndHeaders() {
+				return {
+					ok: true,
+					apiKey: JSON.stringify({ token: "ag-token", projectId: "project-123" }),
+				};
+			},
 		},
 	});
 	ctx.thinkingLevel = "medium";
@@ -483,13 +488,17 @@ test("provider polling uses Pi-resolved Command Code auth", async () => {
 			},
 		});
 	};
-	const ctx = contextFor(model, {
-		async getApiKeyAndHeaders() {
-			return {
-				ok: true,
-				apiKey: "cc-token",
-				baseUrl: "https://api.commandcode.ai/provider/v1",
-			};
+	const ctx = stubCtx({
+		model,
+		modelRegistry: {
+			find: () => model,
+			async getApiKeyAndHeaders() {
+				return {
+					ok: true,
+					apiKey: "cc-token",
+					baseUrl: "https://api.commandcode.ai/provider/v1",
+				};
+			},
 		},
 	});
 
@@ -527,9 +536,13 @@ test("provider polling uses Pi-resolved OpenCode Go API key", async () => {
 			},
 		});
 	};
-	const ctx = contextFor(model, {
-		async getApiKeyAndHeaders() {
-			return { ok: true, apiKey: "oc-go-token" };
+	const ctx = stubCtx({
+		model,
+		modelRegistry: {
+			find: () => model,
+			async getApiKeyAndHeaders() {
+				return { ok: true, apiKey: "oc-go-token" };
+			},
 		},
 	});
 
@@ -558,14 +571,18 @@ test("provider polling uses Pi-resolved Fireworks key and account slug", async (
 			lineItems: [{ totalCost: { units: "4", nanos: 0, currencyCode: "USD" } }],
 		});
 	};
-	const ctx = contextFor(model, {
-		async getApiKeyAndHeaders() {
-			return {
-				ok: true,
-				apiKey: "fw-token",
-				baseUrl: "https://api.fireworks.ai/inference",
-				env: { FIREWORKS_ACCOUNT_SLUG: "acme" },
-			};
+	const ctx = stubCtx({
+		model,
+		modelRegistry: {
+			find: () => model,
+			async getApiKeyAndHeaders() {
+				return {
+					ok: true,
+					apiKey: "fw-token",
+					baseUrl: "https://api.fireworks.ai/inference",
+					env: { FIREWORKS_ACCOUNT_SLUG: "acme" },
+				};
+			},
 		},
 	});
 
@@ -592,9 +609,13 @@ test("provider polling reads Groq five-minute request and token rates", async ()
 		assert.equal(new Headers(init?.headers).get("authorization"), "Bearer groq-token");
 		return Response.json({ status: "success", data: { result: [{ value: [1, "2"] }] } });
 	};
-	const ctx = contextFor(model, {
-		async getApiKeyAndHeaders() {
-			return { ok: true, apiKey: "groq-token", baseUrl: "https://api.groq.com/openai/v1" };
+	const ctx = stubCtx({
+		model,
+		modelRegistry: {
+			find: () => model,
+			async getApiKeyAndHeaders() {
+				return { ok: true, apiKey: "groq-token", baseUrl: "https://api.groq.com/openai/v1" };
+			},
 		},
 	});
 
@@ -633,9 +654,13 @@ test("provider polling reads Hugging Face monthly limit and ZeroGPU quota", asyn
 		}
 		return Response.json({ base: 100, current: 80 });
 	};
-	const ctx = contextFor(model, {
-		async getApiKeyAndHeaders() {
-			return { ok: true, apiKey: "hf-token", baseUrl: "https://router.huggingface.co/v1" };
+	const ctx = stubCtx({
+		model,
+		modelRegistry: {
+			find: () => model,
+			async getApiKeyAndHeaders() {
+				return { ok: true, apiKey: "hf-token", baseUrl: "https://router.huggingface.co/v1" };
+			},
 		},
 	});
 
@@ -664,9 +689,13 @@ test("provider polling treats OpenAI credit-grant access as best-effort", async 
 		assert.equal(new Headers(init?.headers).get("authorization"), "Bearer openai-token");
 		return Response.json({ total_granted: 20, total_used: 5, total_available: 15 });
 	};
-	const ctx = contextFor(model, {
-		async getApiKeyAndHeaders() {
-			return { ok: true, apiKey: "openai-token", baseUrl: "https://api.openai.com/v1" };
+	const ctx = stubCtx({
+		model,
+		modelRegistry: {
+			find: () => model,
+			async getApiKeyAndHeaders() {
+				return { ok: true, apiKey: "openai-token", baseUrl: "https://api.openai.com/v1" };
+			},
 		},
 	});
 
@@ -689,13 +718,17 @@ test("provider polling derives Kimi usage endpoint from Pi base URL", async () =
 		assert.equal(new Headers(init?.headers).get("authorization"), "Bearer kimi-token");
 		return Response.json({ usages: { limit_5h: { used_ratio: 0.1 } } });
 	};
-	const ctx = contextFor(model, {
-		async getApiKeyAndHeaders() {
-			return {
-				ok: true,
-				apiKey: "kimi-token",
-				baseUrl: "https://api.kimi.com/coding/v1",
-			};
+	const ctx = stubCtx({
+		model,
+		modelRegistry: {
+			find: () => model,
+			async getApiKeyAndHeaders() {
+				return {
+					ok: true,
+					apiKey: "kimi-token",
+					baseUrl: "https://api.kimi.com/coding/v1",
+				};
+			},
 		},
 	});
 
@@ -730,13 +763,17 @@ test("provider polling uses MiniMax token-plan endpoint then legacy fallback", a
 			],
 		});
 	};
-	const ctx = contextFor(model, {
-		async getApiKeyAndHeaders() {
-			return {
-				ok: true,
-				apiKey: "minimax-token",
-				baseUrl: "https://api.minimaxi.com/anthropic",
-			};
+	const ctx = stubCtx({
+		model,
+		modelRegistry: {
+			find: () => model,
+			async getApiKeyAndHeaders() {
+				return {
+					ok: true,
+					apiKey: "minimax-token",
+					baseUrl: "https://api.minimaxi.com/anthropic",
+				};
+			},
 		},
 	});
 
@@ -777,9 +814,13 @@ test("provider polling derives Z.AI global and CN origins from Pi base URLs", as
 				data: { limits: [{ type: "TOKENS_LIMIT", unit: 5, number: 300, percentage: 40 }] },
 			});
 		};
-		const ctx = contextFor(model, {
-			async getApiKeyAndHeaders() {
-				return { ok: true, apiKey: "zai-token", baseUrl: scenario.baseUrl };
+		const ctx = stubCtx({
+			model,
+			modelRegistry: {
+				find: () => model,
+				async getApiKeyAndHeaders() {
+					return { ok: true, apiKey: "zai-token", baseUrl: scenario.baseUrl };
+				},
 			},
 		});
 
@@ -807,13 +848,17 @@ test("provider polling uses Pi-resolved OpenRouter API key", async () => {
 			data: { limit: 25, limit_remaining: 20, limit_reset: "monthly" },
 		});
 	};
-	const ctx = contextFor(model, {
-		async getApiKeyAndHeaders() {
-			return {
-				ok: true,
-				apiKey: "or-token",
-				baseUrl: "https://openrouter.ai/api/v1",
-			};
+	const ctx = stubCtx({
+		model,
+		modelRegistry: {
+			find: () => model,
+			async getApiKeyAndHeaders() {
+				return {
+					ok: true,
+					apiKey: "or-token",
+					baseUrl: "https://openrouter.ai/api/v1",
+				};
+			},
 		},
 	});
 
@@ -847,14 +892,18 @@ test("provider polling uses Pi xAI OAuth credential for subscription billing", a
 			},
 		});
 	};
-	const ctx = contextFor(model, {
-		isUsingOAuth: () => true,
-		async getApiKeyAndHeaders() {
-			return {
-				ok: true,
-				apiKey: "oauth-test-value",
-				baseUrl: "https://api.x.ai/v1",
-			};
+	const ctx = stubCtx({
+		model,
+		modelRegistry: {
+			find: () => model,
+			isUsingOAuth: () => true,
+			async getApiKeyAndHeaders() {
+				return {
+					ok: true,
+					apiKey: "oauth-test-value",
+					baseUrl: "https://api.x.ai/v1",
+				};
+			},
 		},
 	});
 
@@ -878,10 +927,14 @@ test("provider polling uses Pi xAI OAuth credential for subscription billing", a
 test("provider polling skips xAI subscription billing without OAuth", async () => {
 	const model: PiModel = { id: "grok-4.6", provider: "xai" };
 	let calls = 0;
-	const ctx = contextFor(model, {
-		isUsingOAuth: () => false,
-		async getApiKeyAndHeaders() {
-			return { ok: true, apiKey: "regular-test-value" };
+	const ctx = stubCtx({
+		model,
+		modelRegistry: {
+			find: () => model,
+			isUsingOAuth: () => false,
+			async getApiKeyAndHeaders() {
+				return { ok: true, apiKey: "regular-test-value" };
+			},
 		},
 	});
 	const result = await fetchProviderQuota(
@@ -896,23 +949,3 @@ test("provider polling skips xAI subscription billing without OAuth", async () =
 	assert.equal(result, undefined);
 	assert.equal(calls, 0);
 });
-
-function contextFor(
-	model: PiModel,
-	modelRegistry: PiContext["modelRegistry"],
-): PiContext {
-	return {
-		ui: {
-			theme: { fg: (_color, text) => text },
-			notify() {},
-			setStatus() {},
-		},
-		model,
-		modelRegistry: {
-			find: () => model,
-			...modelRegistry,
-		},
-		hasUI: true,
-		mode: "tui",
-	};
-}
