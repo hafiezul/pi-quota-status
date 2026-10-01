@@ -182,6 +182,48 @@ test("Hugging Face billing maps monthly spend limit and ZeroGPU quota", () => {
 	);
 });
 
+test("Fireworks account discovery is cached across polls for the same credential", async () => {
+	const model: PiModel = { id: "accounts/acme/models/test", provider: "fireworks" };
+	const requested: string[] = [];
+	const fetchImpl: typeof globalThis.fetch = async (input) => {
+		const url = String(input);
+		requested.push(url);
+		if (url.endsWith("/v1/accounts")) {
+			return Response.json({ accounts: [{ accountId: "accounts/acme" }], nextPageToken: undefined });
+		}
+		return Response.json({
+			lineItems: [{ totalCost: { units: "2", nanos: 0, currencyCode: "USD" } }],
+		});
+	};
+	const ctx = stubCtx({
+		model,
+		modelRegistry: {
+			find: () => model,
+			async getApiKeyAndHeaders() {
+				return { ok: true, apiKey: "fw-discovery-token", baseUrl: "https://api.fireworks.ai/inference" };
+			},
+		},
+	});
+
+	await fetchProviderQuota(
+		ctx,
+		{ provider: model.provider, model: model.id },
+		Date.UTC(2026, 8, 23, 12, 0, 0),
+		fetchImpl,
+	);
+	await fetchProviderQuota(
+		ctx,
+		{ provider: model.provider, model: model.id },
+		Date.UTC(2026, 8, 23, 12, 1, 0),
+		fetchImpl,
+	);
+
+	const discoveryRequests = requested.filter((url) => url.endsWith("/v1/accounts"));
+	const summaryRequests = requested.filter((url) => url.includes("/billing/summary"));
+	assert.equal(discoveryRequests.length, 1);
+	assert.equal(summaryRequests.length, 2);
+});
+
 test("OpenAI credit grants become a credit quota with the next grant expiry", () => {
 	const now = Date.UTC(2026, 8, 23, 12, 0, 0);
 	const future = Math.floor(Date.UTC(2026, 9, 1) / 1000);

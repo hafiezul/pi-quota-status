@@ -490,7 +490,8 @@ async function fetchFireworksQuota({
 	};
 	const configuredSlug = cleanFireworksAccountSlug(auth.env.FIREWORKS_ACCOUNT_SLUG);
 	const accountSlug =
-		configuredSlug ?? (await discoverFireworksAccount(fetchImpl, headers));
+		configuredSlug ??
+		(await resolveFireworksAccount(fetchImpl, token, headers));
 	if (!accountSlug) return undefined;
 	const start = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString();
 	const end = new Date(now).toISOString();
@@ -503,8 +504,25 @@ async function fetchFireworksQuota({
 		method: "GET",
 		headers,
 	});
-	if (!result.ok) return undefined;
+	if (!result.ok) {
+		fireworksAccountSlugCache.delete(token);
+		return undefined;
+	}
 	return parseFireworksSummary(result.json);
+}
+
+const fireworksAccountSlugCache = new Map<string, string>();
+
+async function resolveFireworksAccount(
+	fetchImpl: typeof globalThis.fetch,
+	token: string,
+	headers: Record<string, string>,
+): Promise<string | undefined> {
+	const cached = fireworksAccountSlugCache.get(token);
+	if (cached) return cached;
+	const slug = await discoverFireworksAccount(fetchImpl, headers);
+	if (slug) fireworksAccountSlugCache.set(token, slug);
+	return slug;
 }
 
 async function discoverFireworksAccount(
@@ -580,24 +598,26 @@ async function fetchGroqUsage({
 		accept: "application/json",
 		Authorization: `Bearer ${token}`,
 	};
-	const requests = await fetchGroqMetric(
-		fetchImpl,
-		base,
-		headers,
-		"sum(model_project_id_status_code:requests:rate5m)",
-	);
-	const inputTokens = await fetchGroqMetric(
-		fetchImpl,
-		base,
-		headers,
-		"sum(model_project_id:tokens_in:rate5m)",
-	);
-	const outputTokens = await fetchGroqMetric(
-		fetchImpl,
-		base,
-		headers,
-		"sum(model_project_id:tokens_out:rate5m)",
-	);
+	const [requests, inputTokens, outputTokens] = await Promise.all([
+		fetchGroqMetric(
+			fetchImpl,
+			base,
+			headers,
+			"sum(model_project_id_status_code:requests:rate5m)",
+		),
+		fetchGroqMetric(
+			fetchImpl,
+			base,
+			headers,
+			"sum(model_project_id:tokens_in:rate5m)",
+		),
+		fetchGroqMetric(
+			fetchImpl,
+			base,
+			headers,
+			"sum(model_project_id:tokens_out:rate5m)",
+		),
+	]);
 	if (requests === undefined && inputTokens === undefined && outputTokens === undefined)
 		return undefined;
 	const metrics = [];
