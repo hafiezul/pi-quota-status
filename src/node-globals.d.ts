@@ -41,6 +41,7 @@ declare const fetch: (
 	ok: boolean;
 	status: number;
 	json(): Promise<unknown>;
+	arrayBuffer(): Promise<unknown>;
 }>;
 
 declare module "node:os" {

@@ -1,4 +1,5 @@
 import { clampPercent } from "./format.js";
+import { fetchQuotaJsonWithTimeout } from "./http.js";
 import {
 	asRecord,
 	numberValue,
@@ -31,7 +32,6 @@ const OPENCODE_GO_USAGE_URL = "https://opencode.ai/zen/go/v1/usage";
 const OPENROUTER_API_BASE = "https://openrouter.ai/api/v1";
 const XAI_BILLING_URL =
 	"https://cli-chat-proxy.grok.com/v1/billing?format=credits";
-const REQUEST_TIMEOUT_MS = 10_000;
 
 type ProviderCredentialKind = "oauth" | "other";
 
@@ -228,7 +228,7 @@ async function fetchAntigravityQuota({
 	const body = JSON.stringify({ project: credentials.projectId });
 	for (const endpoint of antigravityEndpoints(auth)) {
 		try {
-			const response = await fetchWithTimeout(
+			const result = await fetchQuotaJsonWithTimeout(
 				fetchImpl,
 				`${endpoint}/v1internal:fetchAvailableModels`,
 				{
@@ -244,9 +244,9 @@ async function fetchAntigravityQuota({
 					body,
 				},
 			);
-			if (!response.ok) continue;
+			if (!result.ok) continue;
 			const parsed = parseAntigravityModels(
-				await response.json(),
+				result.json,
 				ref.model,
 				runtimeModel,
 			);
@@ -354,7 +354,7 @@ async function fetchCommandCodeQuota({
 		accept: "application/json",
 		Authorization: `Bearer ${token}`,
 	};
-	const whoami = await fetchCommandCodeJson(
+	const whoami = await fetchJsonOrThrow(
 		fetchImpl,
 		`${baseUrl}/alpha/whoami`,
 		headers,
@@ -362,7 +362,7 @@ async function fetchCommandCodeQuota({
 	const orgId = stringValue(asRecord(asRecord(whoami)?.org)?.id);
 	const creditsUrl = new URL(`${baseUrl}/alpha/billing/credits`);
 	if (orgId) creditsUrl.searchParams.set("orgId", orgId);
-	const credits = await fetchCommandCodeJson(
+	const credits = await fetchJsonOrThrow(
 		fetchImpl,
 		creditsUrl.toString(),
 		headers,
@@ -394,18 +394,18 @@ function bearerToken(headers: Record<string, string>): string | undefined {
 	return undefined;
 }
 
-async function fetchCommandCodeJson(
+async function fetchJsonOrThrow(
 	fetchImpl: typeof globalThis.fetch,
 	url: string,
 	headers: Record<string, string>,
 ): Promise<unknown> {
-	const response = await fetchWithTimeout(fetchImpl, url, {
+	const result = await fetchQuotaJsonWithTimeout(fetchImpl, url, {
 		method: "GET",
 		headers,
 	});
-	if (!response.ok)
-		throw new Error(`Command Code quota request failed: ${response.status}`);
-	return response.json();
+	if (!result.ok)
+		throw new Error(`Command Code quota request failed: ${result.status}`);
+	return result.json;
 }
 
 export function parseCommandCodeCredits(
@@ -431,7 +431,7 @@ async function fetchDeepSeekQuota({
 }: ProviderQuotaPollArgs): Promise<ParsedQuotaObservation | undefined> {
 	const token = auth.apiKey ?? bearerToken(auth.headers);
 	if (!token) return undefined;
-	const response = await fetchWithTimeout(fetchImpl, DEEPSEEK_BALANCE_URL, {
+	const response = await fetchQuotaJsonWithTimeout(fetchImpl, DEEPSEEK_BALANCE_URL, {
 		method: "GET",
 		headers: {
 			...auth.headers,
@@ -441,7 +441,7 @@ async function fetchDeepSeekQuota({
 	});
 	if (!response.ok)
 		throw new Error(`DeepSeek balance request failed: ${response.status}`);
-	return parseDeepSeekBalance(await response.json());
+	return parseDeepSeekBalance(response.json);
 }
 
 export function parseDeepSeekBalance(
@@ -499,12 +499,12 @@ async function fetchFireworksQuota({
 	);
 	url.searchParams.set("startTime", start);
 	url.searchParams.set("endTime", end);
-	const response = await fetchWithTimeout(fetchImpl, url.toString(), {
+	const result = await fetchQuotaJsonWithTimeout(fetchImpl, url.toString(), {
 		method: "GET",
 		headers,
 	});
-	if (!response.ok) return undefined;
-	return parseFireworksSummary(await response.json());
+	if (!result.ok) return undefined;
+	return parseFireworksSummary(result.json);
 }
 
 async function discoverFireworksAccount(
@@ -516,12 +516,12 @@ async function discoverFireworksAccount(
 	for (let page = 0; page < 20; page += 1) {
 		const url = new URL(`${FIREWORKS_API_ORIGIN}/v1/accounts`);
 		if (pageToken) url.searchParams.set("pageToken", pageToken);
-		const response = await fetchWithTimeout(fetchImpl, url.toString(), {
+		const result = await fetchQuotaJsonWithTimeout(fetchImpl, url.toString(), {
 			method: "GET",
 			headers,
 		});
-		if (!response.ok) return undefined;
-		const root = asRecord(await response.json());
+		if (!result.ok) return undefined;
+		const root = asRecord(result.json);
 		for (const raw of Array.isArray(root?.accounts) ? root.accounts : []) {
 			const account = asRecord(raw);
 			const candidate =
@@ -642,12 +642,12 @@ async function fetchGroqMetric(
 ): Promise<number | undefined> {
 	const url = new URL(`${base}/metrics/prometheus/api/v1/query`);
 	url.searchParams.set("query", query);
-	const response = await fetchWithTimeout(fetchImpl, url.toString(), {
+	const result = await fetchQuotaJsonWithTimeout(fetchImpl, url.toString(), {
 		method: "GET",
 		headers,
 	});
-	if (!response.ok) return undefined;
-	return parseGroqMetric(await response.json());
+	if (!result.ok) return undefined;
+	return parseGroqMetric(result.json);
 }
 
 export function parseGroqMetric(value: unknown): number | undefined {
@@ -686,21 +686,21 @@ async function fetchHuggingFaceQuota({
 		Authorization: `Bearer ${token}`,
 		"User-Agent": "pi-quota-status",
 	};
-	const response = await fetchWithTimeout(fetchImpl, usageUrl.toString(), {
+	const result = await fetchQuotaJsonWithTimeout(fetchImpl, usageUrl.toString(), {
 		method: "GET",
 		headers,
 	});
-	if (!response.ok) return undefined;
-	const parsed = parseHuggingFaceUsage(await response.json());
+	if (!result.ok) return undefined;
+	const parsed = parseHuggingFaceUsage(result.json);
 	if (!parsed) return undefined;
 	try {
-		const gpuResponse = await fetchWithTimeout(
+		const gpuResult = await fetchQuotaJsonWithTimeout(
 			fetchImpl,
 			`${HUGGINGFACE_ORIGIN}/api/spaces/zero-gpu/quota`,
 			{ method: "GET", headers },
 		);
-		if (gpuResponse.ok) {
-			const gpu = parseHuggingFaceGpuQuota(await gpuResponse.json());
+		if (gpuResult.ok && gpuResult.json) {
+			const gpu = parseHuggingFaceGpuQuota(gpuResult.json);
 			if (gpu) parsed.dimensions.push(gpu);
 		}
 	} catch {
@@ -756,7 +756,7 @@ async function fetchOpenAIQuota({
 }: ProviderQuotaPollArgs): Promise<ParsedQuotaObservation | undefined> {
 	const token = auth.apiKey ?? bearerToken(auth.headers);
 	if (!token) return undefined;
-	const response = await fetchWithTimeout(fetchImpl, OPENAI_CREDIT_GRANTS_URL, {
+	const response = await fetchQuotaJsonWithTimeout(fetchImpl, OPENAI_CREDIT_GRANTS_URL, {
 		method: "GET",
 		headers: {
 			...auth.headers,
@@ -765,7 +765,7 @@ async function fetchOpenAIQuota({
 		},
 	});
 	if (!response.ok) return undefined;
-	return parseOpenAICreditGrants(await response.json(), now);
+	return parseOpenAICreditGrants(response.json, now);
 }
 
 export function parseOpenAICreditGrants(
@@ -809,7 +809,7 @@ async function fetchMoonshotQuota({
 	const token = auth.apiKey ?? bearerToken(auth.headers);
 	if (!token) return undefined;
 	const origin = moonshotOrigin(ref.provider, auth.baseUrl);
-	const response = await fetchWithTimeout(fetchImpl, `${origin}/v1/users/me/balance`, {
+	const response = await fetchQuotaJsonWithTimeout(fetchImpl, `${origin}/v1/users/me/balance`, {
 		method: "GET",
 		headers: {
 			...auth.headers,
@@ -819,7 +819,7 @@ async function fetchMoonshotQuota({
 	});
 	if (!response.ok)
 		throw new Error(`Moonshot balance request failed: ${response.status}`);
-	return parseMoonshotBalance(await response.json(), origin.endsWith(".cn") ? "CNY" : "USD");
+	return parseMoonshotBalance(response.json, origin.endsWith(".cn") ? "CNY" : "USD");
 }
 
 function moonshotOrigin(provider: string, baseUrl: string | undefined): string {
@@ -862,7 +862,7 @@ async function fetchKimiQuota({
 	const token = auth.apiKey ?? bearerToken(auth.headers);
 	if (!token) return undefined;
 	const endpoint = kimiUsageEndpoint(auth.baseUrl);
-	const response = await fetchWithTimeout(fetchImpl, endpoint, {
+	const response = await fetchQuotaJsonWithTimeout(fetchImpl, endpoint, {
 		method: "GET",
 		headers: {
 			...auth.headers,
@@ -872,7 +872,7 @@ async function fetchKimiQuota({
 	});
 	if (!response.ok)
 		throw new Error(`Kimi quota request failed: ${response.status}`);
-	return parseKimiUsage(await response.json());
+	return parseKimiUsage(response.json);
 }
 
 function kimiUsageEndpoint(baseUrl: string | undefined): string {
@@ -946,12 +946,12 @@ async function fetchMiniMaxQuota({
 		"/v1/api/openplatform/coding_plan/remains",
 	]) {
 		try {
-			const response = await fetchWithTimeout(fetchImpl, `${origin}${path}`, {
-				method: "GET",
-				headers,
-			});
-			if (!response.ok) continue;
-			const parsed = parseMiniMaxUsage(await response.json());
+		const result = await fetchQuotaJsonWithTimeout(fetchImpl, `${origin}${path}`, {
+			method: "GET",
+			headers,
+		});
+		if (!result.ok) continue;
+		const parsed = parseMiniMaxUsage(result.json);
 			if (parsed) return parsed;
 		} catch {
 			continue;
@@ -1138,7 +1138,7 @@ async function fetchZaiQuota({
 	const token = auth.apiKey ?? bearerToken(auth.headers);
 	if (!token) return undefined;
 	const origin = zaiOrigin(ref.provider, auth.baseUrl);
-	const response = await fetchWithTimeout(
+	const response = await fetchQuotaJsonWithTimeout(
 		fetchImpl,
 		`${origin}/api/monitor/usage/quota/limit`,
 		{
@@ -1151,7 +1151,7 @@ async function fetchZaiQuota({
 		},
 	);
 	if (!response.ok) throw new Error(`Z.AI quota request failed: ${response.status}`);
-	return parseZaiQuota(await response.json());
+	return parseZaiQuota(response.json);
 }
 
 function zaiOrigin(provider: string, baseUrl: string | undefined): string {
@@ -1244,7 +1244,7 @@ async function fetchOpenCodeGoQuota({
 }: ProviderQuotaPollArgs): Promise<ParsedQuotaObservation | undefined> {
 	const token = auth.apiKey ?? bearerToken(auth.headers);
 	if (!token) return undefined;
-	const response = await fetchWithTimeout(fetchImpl, OPENCODE_GO_USAGE_URL, {
+	const response = await fetchQuotaJsonWithTimeout(fetchImpl, OPENCODE_GO_USAGE_URL, {
 		method: "GET",
 		headers: {
 			...auth.headers,
@@ -1255,7 +1255,7 @@ async function fetchOpenCodeGoQuota({
 	});
 	if (!response.ok)
 		throw new Error(`OpenCode Go quota request failed: ${response.status}`);
-	return parseOpenCodeGoUsage(await response.json());
+	return parseOpenCodeGoUsage(response.json);
 }
 
 export function parseOpenCodeGoUsage(
@@ -1281,7 +1281,7 @@ async function fetchOpenRouterQuota({
 	const token = auth.apiKey ?? bearerToken(auth.headers);
 	if (!token) return undefined;
 	const baseUrl = openRouterApiBase(auth);
-	const response = await fetchWithTimeout(fetchImpl, `${baseUrl}/key`, {
+	const response = await fetchQuotaJsonWithTimeout(fetchImpl, `${baseUrl}/key`, {
 		method: "GET",
 		headers: {
 			...auth.headers,
@@ -1292,7 +1292,7 @@ async function fetchOpenRouterQuota({
 	});
 	if (!response.ok)
 		throw new Error(`OpenRouter quota request failed: ${response.status}`);
-	return parseOpenRouterKey(await response.json());
+	return parseOpenRouterKey(response.json);
 }
 
 function openRouterApiBase(auth: ProviderQuotaAuth): string {
@@ -1352,7 +1352,7 @@ async function fetchXaiQuota({
 	if (credentialKind !== "oauth") return undefined;
 	const token = auth.apiKey ?? bearerToken(auth.headers);
 	if (!token) return undefined;
-	const response = await fetchWithTimeout(fetchImpl, XAI_BILLING_URL, {
+	const response = await fetchQuotaJsonWithTimeout(fetchImpl, XAI_BILLING_URL, {
 		method: "GET",
 		headers: {
 			...auth.headers,
@@ -1363,7 +1363,7 @@ async function fetchXaiQuota({
 		},
 	});
 	if (!response.ok) return undefined;
-	return parseXaiSubscriptionBilling(await response.json(), now);
+	return parseXaiSubscriptionBilling(response.json, now);
 }
 
 export function parseXaiSubscriptionBilling(
@@ -1454,16 +1454,3 @@ function parseCommandCodeWindow(
 	};
 }
 
-async function fetchWithTimeout(
-	fetchImpl: typeof globalThis.fetch,
-	input: string,
-	init: RequestInit,
-): Promise<Response> {
-	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-	try {
-		return await fetchImpl(input, { ...init, signal: controller.signal });
-	} finally {
-		clearTimeout(timer);
-	}
-}
