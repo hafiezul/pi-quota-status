@@ -2,6 +2,7 @@ import { parseQuotaHeaders } from "./adapters.js";
 import {
 	DEFAULT_CONFIG,
 	DEFAULT_CRITICAL_THRESHOLD,
+	DEFAULT_REFRESH_INTERVAL_MS,
 	DEFAULT_WARNING_THRESHOLD,
 	ensureConfigTemplate,
 	loadConfig,
@@ -271,6 +272,7 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 			runtime.quickRetryTimer = undefined;
 			refreshAndUpdateStatusInBackground(ctx, generation);
 		}, 7_500);
+		unrefTimer(runtime.quickRetryTimer);
 	}
 
 	pi.on("session_start", async (_event, ctx) => {
@@ -287,7 +289,8 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 		if (!isCurrentSession(generation)) return;
 		runtime.refreshTimer = setInterval(() => {
 			refreshAndUpdateStatusInBackground(ctx, generation);
-		}, runtime.config.refreshIntervalMs ?? 60_000);
+		}, runtime.config.refreshIntervalMs ?? DEFAULT_REFRESH_INTERVAL_MS);
+		unrefTimer(runtime.refreshTimer);
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
@@ -641,6 +644,10 @@ function resolveModel(ctx: PiContext, ref: ModelRef): PiModel | undefined {
 	} catch {
 		return undefined;
 	}
+}
+
+function unrefTimer(timer: unknown): void {
+	(timer as { unref?: () => void }).unref?.();
 }
 
 function isStaleContextError(error: unknown): boolean {

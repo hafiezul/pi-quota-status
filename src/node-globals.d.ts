@@ -1,5 +1,6 @@
 declare const process: {
 	pid: number;
+	execPath: string;
 	env: Record<string, string | undefined>;
 	cwd(): string;
 };
@@ -58,15 +59,20 @@ declare module "node:fs" {
 }
 
 declare module "node:child_process" {
-	export interface ChildProcess {
+	export interface ChildProcessUnref {
+		unref?(): void;
+	}
+	export interface ChildProcess extends ChildProcessUnref {
 		stdin: {
 			write(data: string, callback?: (error?: Error | null) => void): boolean;
+			unref?(): void;
 		};
 		stdout: {
 			setEncoding(encoding: "utf8"): void;
 			on(event: "data", listener: (chunk: string) => void): unknown;
+			unref?(): void;
 		};
-		stderr: { resume(): void };
+		stderr: { resume(): void; unref?(): void };
 		killed: boolean;
 		kill(signal?: string): boolean;
 		on(event: "error", listener: (error: Error) => void): unknown;
@@ -80,6 +86,22 @@ declare module "node:child_process" {
 		args?: string[],
 		options?: { stdio?: string[]; env?: Record<string, string | undefined> },
 	): ChildProcess;
+	export interface SpawnSyncResult {
+		status: number | null;
+		timedOut: boolean;
+		stdout: { toString(encoding?: string): string };
+		stderr: { toString(encoding?: string): string };
+	}
+	export function spawnSync(
+		command: string,
+		args?: string[],
+		options?: {
+			env?: Record<string, string | undefined>;
+			timeout?: number;
+			input?: string;
+			cwd?: string;
+		},
+	): SpawnSyncResult;
 }
 
 declare module "node:fs/promises" {
