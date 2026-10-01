@@ -309,7 +309,8 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 	pi.on("model_select", async (event: PiModelSelectEvent, ctx) => {
 		const generation = runtime.sessionGeneration;
 		runtime.activeModel = getModelRef(event.model);
-		await refreshAndUpdateStatus(ctx, generation);
+		safeUpdateStatus(ctx, generation);
+		refreshAndUpdateStatusInBackground(ctx, generation);
 	});
 
 	pi.on(

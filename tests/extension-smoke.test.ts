@@ -213,6 +213,76 @@ test("OAuth-backed native providers are not labeled as subscriptions", async () 
 	assert.deepEqual(statuses, ["quota n/a"]);
 });
 
+test("model selection repaints saved state and refreshes in background", async () => {
+	const storage = await useTempQuotaDir();
+	const fetchStub = stubGlobalFetchPending();
+	try {
+		await writeFile(
+			join(storage.dir, "config.json"),
+			JSON.stringify({
+				refreshIntervalMs: 60_000,
+				adapters: [
+					{
+						name: "anthropic",
+						type: "anthropic",
+						provider: "anthropic",
+						models: ["claude-*"],
+					},
+				],
+			}),
+		);
+		const statuses: Array<string | undefined> = [];
+		const model = { provider: "anthropic", id: "claude-sonnet-4" };
+		const ctx = stubCtx({
+			model,
+			statuses,
+			modelRegistry: {
+				isUsingOAuth(candidate) {
+					return candidate === model;
+				},
+				async getApiKeyForProvider() {
+					return "oauth-token";
+				},
+			},
+		});
+		const stub = stubPi();
+		quotaStatusExtension(stub.api);
+		const modelSelect = stub.handlers.get("model_select");
+		if (!modelSelect) throw new Error("model_select handler was not registered");
+		const modelSelectDone = (async () => {
+			await modelSelect({ model, source: "set" }, ctx);
+			return true;
+		})();
+		const resolved = await Promise.race([
+			modelSelectDone,
+			new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 500)),
+		]);
+		assert.equal(resolved, true, "model_select must not block on the quota poll");
+		assert.equal(statuses.length >= 1, true);
+		assert.equal(/quota n\/a/.test(statuses[0] ?? ""), true);
+
+		fetchStub.release({
+			ok: true,
+			status: 200,
+			async json() {
+				return { five_hour: { utilization: 20 } };
+			},
+		});
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		assert.equal(/5h 80%/.test(statuses.at(-1) ?? ""), true);
+	} finally {
+		fetchStub.release({
+			ok: true,
+			status: 200,
+			async json() {
+				return { five_hour: { utilization: 20 } };
+			},
+		});
+		fetchStub.restore();
+		await storage.cleanup();
+	}
+});
+
 test("OpenAI Codex subscription usage parses quota windows", () => {
 	const parsed = parseOpenAICodexUsage(
 		{
