@@ -269,15 +269,6 @@ export function selectFooterQuotaForModel(
 	};
 }
 
-export function selectProviderMetricForModel(
-	state: QuotaState,
-	config: QuotaStatusConfig,
-	ref: ModelRef,
-	now = Date.now(),
-): ProviderMetricObservation | undefined {
-	return selectProviderMetricsForModel(state, config, ref, now)[0];
-}
-
 export function selectProviderMetricsForModel(
 	state: QuotaState,
 	config: QuotaStatusConfig,
