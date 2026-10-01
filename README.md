@@ -88,7 +88,7 @@ Global files are kept separate:
 
 `config.json` is user-editable. `state.json` contains parsed quota observations only. Raw provider headers, prompts, responses, and tokens are never persisted.
 
-State writes use a small lock plus atomic rename so concurrent Pi sessions merge state instead of overwriting the whole file blindly. `/quota debug` reports sanitized status fields only, not raw provider payloads.
+State writes use a small lock plus atomic rename so concurrent Pi sessions merge state instead of overwriting the whole file blindly. Stale entries get pruned on the next write: quota observations lapse 30 days after their last update (fallback windows survive until their reset timestamp passes), and pending Codex confirmations lapse after 24 hours. `/quota debug` reports sanitized status fields only, not raw provider payloads.
 
 ## Configuration
 

@@ -4,27 +4,80 @@ import type { LoadResult, QuotaState } from "./types.js";
 
 const LOCK_STALE_MS = 10_000;
 const LOCK_WAIT_MS = 5_000;
+const STALE_OBSERVATION_MS = 30 * 24 * 60 * 60 * 1000;
+const STALE_PENDING_MS = 24 * 60 * 60 * 1000;
 
 export function emptyState(): QuotaState {
 	return { version: 1, observations: {} };
 }
 
-export function normalizeState(value: unknown): QuotaState {
+export function normalizeState(value: unknown, now = Date.now()): QuotaState {
 	if (!value || typeof value !== "object") return emptyState();
 	const maybe = value as Partial<QuotaState>;
 	const observations =
 		maybe.observations && typeof maybe.observations === "object"
-			? maybe.observations
+			? pruneStaleObservations({ ...maybe. observations }, now)
 			: {};
 	const pendingObservations =
 		maybe.pendingObservations && typeof maybe.pendingObservations === "object"
-			? { ...maybe.pendingObservations }
+			? pruneStalePending(
+					{
+						...maybe.pendingObservations,
+					} as NonNullable<QuotaState["pendingObservations"]>,
+					now,
+			  )
+			: undefined;
+	const keptPending =
+		pendingObservations && Object.keys(pendingObservations).length > 0
+			? pendingObservations
 			: undefined;
 	return {
 		version: 1,
-		observations: { ...observations },
-		...(pendingObservations ? { pendingObservations } : {}),
+		observations,
+		...(keptPending ? { pendingObservations: keptPending } : {}),
 	};
+}
+
+function pruneStaleObservations(
+	observations: QuotaState["observations"],
+	now: number,
+): QuotaState["observations"] {
+	for (const key of Object.keys(observations)) {
+		if (observationStale(observations[key], now)) delete observations[key];
+	}
+	return observations;
+}
+
+function observationStale(
+	observation: QuotaState["observations"][string] | undefined,
+	now: number,
+): boolean {
+	if (!observation) return true;
+	if (observation.source === "fallback")
+		return !observation.dimensions.some(
+			(dimension) => dimension.resetAt !== undefined && dimension.resetAt > now,
+		);
+	const updatedAt = observation.updatedAt as unknown;
+	return typeof updatedAt !== "number" || updatedAt <= now - STALE_OBSERVATION_MS;
+}
+
+function pruneStalePending(
+	pending: NonNullable<QuotaState["pendingObservations"]>,
+	now: number,
+): NonNullable<QuotaState["pendingObservations"]> {
+	for (const key of Object.keys(pending)) {
+		const entry = pending[key] as unknown;
+		const createdAt =
+			entry && typeof entry === "object" && "createdAt" in entry
+				? (entry as { createdAt?: unknown }).createdAt
+				: undefined;
+		if (
+			typeof createdAt !== "number" ||
+			now - createdAt > STALE_PENDING_MS
+		)
+			delete pending[key];
+	}
+	return pending;
 }
 
 export async function readJsonFile<T>(
