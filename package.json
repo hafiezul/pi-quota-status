@@ -35,7 +35,10 @@
   },
   "scripts": {
     "test": "node -e \"require('node:fs').rmSync('.tmp-test',{recursive:true,force:true})\" && tsc -p tsconfig.test.json && node --test .tmp-test/tests/*.test.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run typecheck && npm test",
+    "preversion": "npm test",
+    "postversion": "git push && git push --tags"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
