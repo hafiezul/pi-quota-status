@@ -101,6 +101,10 @@ class CodexRpcClient {
 			this.closed = true;
 			this.rejectAll(new Error("codex app-server closed"));
 		});
+		this.child.unref?.();
+		this.child.stdin.unref?.();
+		this.child.stdout.unref?.();
+		this.child.stderr.unref?.();
 	}
 
 	async initialize(): Promise<void> {

@@ -5,6 +5,7 @@ import {
 	OPENAI_CODEX_PROVIDER,
 } from "./codex-policy.js";
 import { clampPercent } from "./format.js";
+import { fetchQuotaJsonWithTimeout } from "./http.js";
 import type { PiContext } from "./pi-types.js";
 import {
 	asRecord,
@@ -24,7 +25,6 @@ import type {
 	ParsedQuotaObservation,
 } from "./types.js";
 
-const REQUEST_TIMEOUT_MS = 10_000;
 const ANTHROPIC_PROVIDER = "anthropic";
 const OPENAI_CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const ANTHROPIC_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
@@ -113,16 +113,12 @@ async function fetchQuotaJson(
 	label: string,
 	parse: (value: unknown) => ParsedQuotaObservation | undefined,
 ): Promise<ParsedQuotaObservation | undefined> {
-	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-	try {
-		const response = await fetch(url, { headers, signal: controller.signal });
-		if (!response.ok)
-			throw new Error(`${label} quota request failed: ${response.status}`);
-		return parse(await response.json());
-	} finally {
-		clearTimeout(timeout);
-	}
+	const result = await fetchQuotaJsonWithTimeout(globalThis.fetch, url, {
+		headers,
+	});
+	if (!result.ok)
+		throw new Error(`${label} quota request failed: ${result.status}`);
+	return parse(result.json);
 }
 
 export function parseOpenAICodexUsage(

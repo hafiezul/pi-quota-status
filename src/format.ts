@@ -35,22 +35,6 @@ export function formatProviderMetric(metric: ProviderMetricObservation): string 
 	return `${formatMetricNumber(value)} ${metric.unit}`;
 }
 
-export function formatCountdown(
-	resetAt: number | undefined,
-	now = Date.now(),
-): string {
-	if (resetAt === undefined) return "unknown";
-	const ms = resetAt - now;
-	if (ms <= 0) return "now";
-	const minute = 60_000;
-	const hour = 60 * minute;
-	const day = 24 * hour;
-	if (ms < minute) return "<1m";
-	if (ms < hour) return `${Math.ceil(ms / minute)}m`;
-	if (ms < 48 * hour) return `${Math.ceil(ms / hour)}h`;
-	return `${Math.ceil(ms / day)}d`;
-}
-
 export function formatResetTime(
 	resetAt: number | undefined,
 	now = Date.now(),
@@ -81,17 +65,6 @@ export function formatFreshness(
 	if (ms < hour) return `${Math.floor(ms / minute)}m ago`;
 	if (ms < day) return `${Math.floor(ms / hour)}h ago`;
 	return `${Math.floor(ms / day)}d ago`;
-}
-
-export function formatFooterText(
-	percent: number,
-	resetAt: number | undefined,
-	now = Date.now(),
-	label = "quota",
-): string {
-	const percentText = `${label} ${Math.floor(clampPercent(percent))}% left`;
-	if (resetAt === undefined) return percentText;
-	return `${percentText} · reset ${formatResetTime(resetAt, now)}`;
 }
 
 export function formatCompactFooterText(

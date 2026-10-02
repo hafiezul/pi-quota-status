@@ -15,7 +15,7 @@ import {
 	consumeFallbackQuota,
 	ensureFallbackObservation,
 	selectFooterQuotaForModel,
-	selectProviderMetricForModel,
+	selectProviderMetricsForModel,
 	selectQuotaForModel,
 	upsertObservation,
 } from "../src/quota.js";
@@ -741,7 +741,10 @@ test("metric-only provider observations stay selectable and render in quota rows
 		),
 	);
 
-	assert.equal(selectProviderMetricForModel(state, config, ref, now)?.value, 12.25);
+	assert.equal(
+		selectProviderMetricsForModel(state, config, ref, now)[0]?.value,
+		12.25,
+	);
 	assert.equal(buildQuotaRows(config, state, [], now)[0]?.percent, "$12.25");
 });
 

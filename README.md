@@ -88,7 +88,7 @@ Global files are kept separate:
 
 `config.json` is user-editable. `state.json` contains parsed quota observations only. Raw provider headers, prompts, responses, and tokens are never persisted.
 
-State writes use a small lock plus atomic rename so concurrent Pi sessions merge state instead of overwriting the whole file blindly. `/quota debug` reports sanitized status fields only, not raw provider payloads.
+State writes use a small lock plus atomic rename so concurrent Pi sessions merge state instead of overwriting the whole file blindly. Stale entries get pruned on the next write: quota observations lapse 30 days after their last update (fallback windows survive until their reset timestamp passes), and pending Codex confirmations lapse after 24 hours. `/quota debug` reports sanitized status fields only, not raw provider payloads.
 
 ## Configuration
 
@@ -120,3 +120,12 @@ Read the [configuration reference](docs/configuration.md) for:
 - Some CodexBar providers use credentials Pi does not expose for quota access. Examples include GitHub Copilot's raw GitHub OAuth token, Gemini CLI OAuth, browser-session billing for Mistral/OpenCode/Qwen Cloud/Xiaomi MiMo, and cloud billing credentials for Bedrock/Vertex AI. Those providers are not given synthetic `quota n/a` data from an incompatible Pi inference key.
 - Header naming differs across providers and proxies; use a generic adapter mapping for custom headers.
 - Token/cost fallback units are reserved for later expansion; v1's automatic fallback deduction is turn-based.
+
+## Release flow
+
+For maintainers:
+
+- `npm version <patch|minor|major>` runs the test suite through `preversion`, bumps the version, and pushes main plus the tag through `postversion`.
+- `npm publish` reruns typecheck and tests through `prepublishOnly` before packing.
+- CI (`.github/workflows/ci.yml`) runs `npm ci`, typecheck, and tests on Node 22 and 24 for pushes to main and for pull requests.
+- Commit `package-lock.json` and keep it current so `npm ci` builds are reproducible.

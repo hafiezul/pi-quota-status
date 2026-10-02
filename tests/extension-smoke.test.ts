@@ -1,15 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import quotaStatusExtension from "../src/index.js";
-import type {
-	PiAfterProviderResponseEvent,
-	PiCommandDefinition,
-	PiContext,
-	PiExtensionAPI,
-	PiModelSelectEvent,
-} from "../src/pi-types.js";
 import {
 	extractChatGPTAccountId,
 	fetchOpenAICodexQuota,
@@ -17,52 +10,30 @@ import {
 	parseAnthropicUsage,
 	parseOpenAICodexUsage,
 } from "../src/subscription.js";
+import {
+	stubCtx,
+	stubGlobalFetch,
+	stubGlobalFetchPending,
+	stubPi,
+	useTempQuotaDir,
+} from "./helpers.js";
 
 test("extension registers expected events and /quota command", () => {
-	const events: string[] = [];
-	const commands = new Map<string, PiCommandDefinition>();
-	const pi: PiExtensionAPI = {
-		on(event: string) {
-			events.push(event);
-		},
-		registerCommand(name: string, definition: PiCommandDefinition) {
-			commands.set(name, definition);
-		},
-		sendMessage() {
-			// no-op
-		},
-	};
-	quotaStatusExtension(pi);
-	assert.deepEqual(events, [
+	const stub = stubPi();
+	quotaStatusExtension(stub.api);
+	assert.deepEqual([...stub.handlers.keys()], [
 		"session_start",
 		"session_shutdown",
 		"model_select",
 		"after_provider_response",
 	]);
-	assert.ok(commands.has("quota"));
+	assert.ok(stub.commands.has("quota"));
 });
 
 test("session start renders saved quota before subscription refresh finishes", async () => {
-	type CapturedHandler = (
-		event: unknown,
-		ctx: PiContext,
-	) => void | Promise<void>;
-	type FetchResponse = {
-		ok: boolean;
-		status: number;
-		json(): Promise<unknown>;
-	};
-	const handlers = new Map<string, CapturedHandler>();
-	const statuses: Array<string | undefined> = [];
-	const dir = join(
-		process.cwd(),
-		`.tmp-quota-status-startup-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-	);
-	await mkdir(dir, { recursive: true });
-	const previousDir = process.env.PI_QUOTA_STATUS_DIR;
-	process.env.PI_QUOTA_STATUS_DIR = dir;
+	const storage = await useTempQuotaDir();
 	await writeFile(
-		join(dir, "config.json"),
+		join(storage.dir, "config.json"),
 		JSON.stringify({
 			refreshIntervalMs: 60_000,
 			adapters: [
@@ -70,13 +41,13 @@ test("session start renders saved quota before subscription refresh finishes", a
 					name: "anthropic",
 					type: "anthropic",
 					provider: "anthropic",
-					models: ["claude-*"]
+					models: ["claude-*"],
 				},
 			],
 		}),
 	);
 	await writeFile(
-		join(dir, "state.json"),
+		join(storage.dir, "state.json"),
 		JSON.stringify({
 			version: 1,
 			observations: {
@@ -93,7 +64,7 @@ test("session start renders saved quota before subscription refresh finishes", a
 							limit: 100,
 							remaining: 72,
 							observedAt: Date.now() - 1_000,
-							source: "subscription"
+							source: "subscription",
 						},
 					],
 				},
@@ -101,48 +72,16 @@ test("session start renders saved quota before subscription refresh finishes", a
 		}),
 	);
 
-	const originalFetch = globalThis.fetch;
-	let releaseFetch!: (response: FetchResponse) => void;
-	let fetchStarted!: () => void;
-	const fetchStartedPromise = new Promise<void>((resolve) => {
-		fetchStarted = resolve;
+	const fetchStub = stubGlobalFetchPending();
+	let resolveStatus!: () => void;
+	const refreshedStatus = new Promise<void>((resolve) => {
+		resolveStatus = resolve;
 	});
-	const fetchResponse = new Promise<FetchResponse>((resolve) => {
-		releaseFetch = resolve;
-	});
-	(globalThis as unknown as { fetch: typeof fetch }).fetch = (async () => {
-		fetchStarted();
-		return fetchResponse;
-	}) as unknown as typeof fetch;
-	let refreshedStatus!: () => void;
-	const refreshedStatusPromise = new Promise<void>((resolve) => {
-		refreshedStatus = resolve;
-	});
+	const statuses: Array<string | undefined> = [];
 	const model = { provider: "anthropic", id: "claude-sonnet-4" };
-	const pi = {
-		on(event: string, handler: unknown) {
-			handlers.set(event, handler as CapturedHandler);
-		},
-		registerCommand() {
-			// no-op
-		},
-		sendMessage() {
-			// no-op
-		},
-	} as PiExtensionAPI;
-	quotaStatusExtension(pi);
-	const ctx: PiContext = {
-		ui: {
-			theme: { fg: (_color, text) => text },
-			notify() {
-				// no-op
-			},
-			setStatus(_key, text) {
-				statuses.push(text);
-				if (text?.includes("70%")) refreshedStatus();
-			},
-		},
+	const ctx = stubCtx({
 		model,
+		statuses: statuses,
 		modelRegistry: {
 			isUsingOAuth(candidate) {
 				return candidate === model;
@@ -151,14 +90,17 @@ test("session start renders saved quota before subscription refresh finishes", a
 				return "oauth-token";
 			},
 		},
-		hasUI: true,
-		mode: "tui",
-	};
-	const sessionStart = handlers.get("session_start");
+		onStatus(text) {
+			if (text !== undefined && text.includes("70%")) resolveStatus();
+		},
+	});
+	const stub = stubPi();
+	quotaStatusExtension(stub.api);
+	const sessionStart = stub.handlers.get("session_start");
 	if (!sessionStart) throw new Error("session_start handler was not registered");
 	const startupPromise = Promise.resolve(sessionStart({ reason: "startup" }, ctx));
 	try {
-		await fetchStartedPromise;
+		await fetchStub.wasCalled();
 		const startupCompleted = await Promise.race([
 			startupPromise.then(() => true),
 			new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 50)),
@@ -166,7 +108,7 @@ test("session start renders saved quota before subscription refresh finishes", a
 		assert.equal(startupCompleted, true);
 		assert.equal(/5h 72%/.test(statuses[0] ?? ""), true);
 
-		releaseFetch({
+		fetchStub.release({
 			ok: true,
 			status: 200,
 			async json() {
@@ -174,10 +116,10 @@ test("session start renders saved quota before subscription refresh finishes", a
 			},
 		});
 		await startupPromise;
-		await refreshedStatusPromise;
+		await refreshedStatus;
 		assert.equal(/5h 70%/.test(statuses.at(-1) ?? ""), true);
 	} finally {
-		releaseFetch({
+		fetchStub.release({
 			ok: true,
 			status: 200,
 			async json() {
@@ -185,241 +127,160 @@ test("session start renders saved quota before subscription refresh finishes", a
 			},
 		});
 		await startupPromise.catch(() => undefined);
-		const shutdown = handlers.get("session_shutdown");
+		const shutdown = stub.handlers.get("session_shutdown");
 		if (shutdown) await shutdown({ reason: "test" }, ctx);
-		globalThis.fetch = originalFetch;
-		if (previousDir === undefined) delete process.env.PI_QUOTA_STATUS_DIR;
-		else process.env.PI_QUOTA_STATUS_DIR = previousDir;
-		await rm(dir, { recursive: true, force: true });
+		fetchStub.restore();
+		await storage.cleanup();
 	}
 });
 
 test("/quota status is accepted as table alias", async () => {
-	const commands = new Map<string, PiCommandDefinition>();
-	const messages: string[] = [];
+	const stub = stubPi();
+	quotaStatusExtension(stub.api);
+	const statuses: Array<string | undefined> = [];
 	const notifications: string[] = [];
-	const pi: PiExtensionAPI = {
-		on() {
-			// no-op
-		},
-		registerCommand(name: string, definition: PiCommandDefinition) {
-			commands.set(name, definition);
-		},
-		sendMessage(message) {
-			messages.push(message.content);
-		},
-	};
-	quotaStatusExtension(pi);
-
-	await commands.get("quota")?.handler("status", {
-		ui: {
-			theme: { fg: (_color, text) => text },
-			notify(message) {
-				notifications.push(message);
-			},
-			setStatus() {
-				// no-op
-			},
-		},
-		modelRegistry: {},
-		hasUI: true,
-		mode: "tui",
-	});
-
+	await stub.commands.get("quota")?.handler(
+		"status",
+		stubCtx({ statuses, notifications }),
+	);
 	assert.deepEqual(notifications, []);
-	assert.deepEqual(messages, ["No tracked quota data yet."]);
+	assert.deepEqual(stub.messages, ["No tracked quota data yet."]);
 });
 
 test("/quota status explains subscription quota unavailability", async () => {
-	const commands = new Map<string, PiCommandDefinition>();
-	const messages: string[] = [];
+	const stub = stubPi();
+	quotaStatusExtension(stub.api);
 	const model = { provider: "openai-codex", id: "gpt-5.5" };
-	const pi: PiExtensionAPI = {
-		on() {
-			// no-op
-		},
-		registerCommand(name: string, definition: PiCommandDefinition) {
-			commands.set(name, definition);
-		},
-		sendMessage(message) {
-			messages.push(message.content);
-		},
-	};
-	quotaStatusExtension(pi);
-
-	await commands.get("quota")?.handler("status", {
-		ui: {
-			theme: { fg: (_color, text) => text },
-			notify() {
-				// no-op
+	await stub.commands.get("quota")?.handler(
+		"status",
+		stubCtx({
+			model,
+			modelRegistry: {
+				isUsingOAuth(candidate) {
+					return candidate === model;
+				},
 			},
-			setStatus() {
-				// no-op
-			},
-		},
-		model,
-		modelRegistry: {
-			isUsingOAuth(candidate) {
-				return candidate === model;
-			},
-		},
-		hasUI: true,
-		mode: "tui",
-	});
-
-	assert.ok(/No provider quota data/.test(messages[0] ?? ""));
+		}),
+	);
+	assert.ok(/No provider quota data/.test(stub.messages[0] ?? ""));
 });
 
 test("custom key models show header quota", async () => {
-	type CapturedHandler = (
-		event: unknown,
-		ctx: PiContext,
-	) => void | Promise<void>;
-	const handlers = new Map<string, CapturedHandler>();
+	const stub = stubPi();
+	quotaStatusExtension(stub.api);
 	const statuses: Array<string | undefined> = [];
-	const model = { provider: "openai", id: "gpt-5.5" };
-	const pi = {
-		on(event: string, handler: unknown) {
-			handlers.set(event, handler as CapturedHandler);
-		},
-		registerCommand() {
-			// no-op
-		},
-		sendMessage() {
-			// no-op
-		},
-	} as PiExtensionAPI;
-	quotaStatusExtension(pi);
-
-	const ctx: PiContext = {
-		ui: {
-			theme: { fg: (_color, text) => text },
-			notify() {
-				// no-op
-			},
-			setStatus(_key, text) {
-				statuses.push(text);
-			},
-		},
-		model,
-		modelRegistry: {
-			isUsingOAuth() {
-				return false;
-			},
-		},
-		hasUI: true,
-		mode: "tui",
-	};
-
-	await handlers.get("after_provider_response")?.(
-		{
-			status: 200,
-			headers: {
-				"x-ratelimit-limit-requests": "100",
-				"x-ratelimit-remaining-requests": "72",
-			},
-		} satisfies PiAfterProviderResponseEvent,
+	const ctx = stubCtx({
+		model: { provider: "openai", id: "gpt-5.5" },
+		modelRegistry: { isUsingOAuth() { return false; } },
+		statuses,
+	});
+	await stub.handlers.get("after_provider_response")!(
+		{ status: 200, headers: {
+			"x-ratelimit-limit-requests": "100",
+			"x-ratelimit-remaining-requests": "72",
+		} },
 		ctx,
 	);
-
 	assert.deepEqual(statuses, ["Req 72%"]);
 });
 
 test("providers without quota data clear extension status", async () => {
-	type CapturedHandler = (
-		event: unknown,
-		ctx: PiContext,
-	) => void | Promise<void>;
-	const handlers = new Map<string, CapturedHandler>();
+	const stub = stubPi();
+	quotaStatusExtension(stub.api);
 	const statuses: Array<string | undefined> = [];
-	const model = { provider: "custom-provider", id: "custom-model" };
-	const pi = {
-		on(event: string, handler: unknown) {
-			handlers.set(event, handler as CapturedHandler);
-		},
-		registerCommand() {
-			// no-op
-		},
-		sendMessage() {
-			// no-op
-		},
-	} as PiExtensionAPI;
-	quotaStatusExtension(pi);
-
-	const ctx: PiContext = {
-		ui: {
-			theme: { fg: (_color, text) => text },
-			notify() {
-				// no-op
-			},
-			setStatus(_key, text) {
-				statuses.push(text);
-			},
-		},
-		model,
-		modelRegistry: {},
-		hasUI: true,
-		mode: "tui",
-	};
-
-	await handlers.get("after_provider_response")?.(
-		{ status: 200, headers: {} } satisfies PiAfterProviderResponseEvent,
-		ctx,
+	await stub.handlers.get("after_provider_response")!(
+		{ status: 200, headers: {} },
+		stubCtx({
+			model: { provider: "custom-provider", id: "custom-model" },
+			statuses,
+		}),
 	);
-
 	assert.deepEqual(statuses, [undefined]);
 });
 
 test("OAuth-backed native providers are not labeled as subscriptions", async () => {
-	type CapturedHandler = (
-		event: unknown,
-		ctx: PiContext,
-	) => void | Promise<void>;
-	const handlers = new Map<string, CapturedHandler>();
+	const stub = stubPi();
+	quotaStatusExtension(stub.api);
 	const statuses: Array<string | undefined> = [];
-	const model = {
-		provider: "commandcode",
-		id: "meta/muse-spark-1.3-contributor",
-	};
-	const pi = {
-		on(event: string, handler: unknown) {
-			handlers.set(event, handler as CapturedHandler);
-		},
-		registerCommand() {
-			// no-op
-		},
-		sendMessage() {
-			// no-op
-		},
-	} as PiExtensionAPI;
-	quotaStatusExtension(pi);
-
-	const ctx: PiContext = {
-		ui: {
-			theme: { fg: (_color, text) => text },
-			notify() {
-				// no-op
-			},
-			setStatus(_key, text) {
-				statuses.push(text);
-			},
-		},
-		model,
-		modelRegistry: {
-			isUsingOAuth() {
-				return true;
-			},
-		},
-		hasUI: true,
-		mode: "tui",
-	};
-
-	await handlers.get("after_provider_response")?.(
-		{ status: 200, headers: {} } satisfies PiAfterProviderResponseEvent,
-		ctx,
+	await stub.handlers.get("after_provider_response")!(
+		{ status: 200, headers: {} },
+		stubCtx({
+			model: { provider: "commandcode", id: "meta/muse-spark-1.3-contributor" },
+			modelRegistry: { isUsingOAuth() { return true; } },
+			statuses,
+		}),
 	);
-
 	assert.deepEqual(statuses, ["quota n/a"]);
+});
+
+test("model selection repaints saved state and refreshes in background", async () => {
+	const storage = await useTempQuotaDir();
+	const fetchStub = stubGlobalFetchPending();
+	try {
+		await writeFile(
+			join(storage.dir, "config.json"),
+			JSON.stringify({
+				refreshIntervalMs: 60_000,
+				adapters: [
+					{
+						name: "anthropic",
+						type: "anthropic",
+						provider: "anthropic",
+						models: ["claude-*"],
+					},
+				],
+			}),
+		);
+		const statuses: Array<string | undefined> = [];
+		const model = { provider: "anthropic", id: "claude-sonnet-4" };
+		const ctx = stubCtx({
+			model,
+			statuses,
+			modelRegistry: {
+				isUsingOAuth(candidate) {
+					return candidate === model;
+				},
+				async getApiKeyForProvider() {
+					return "oauth-token";
+				},
+			},
+		});
+		const stub = stubPi();
+		quotaStatusExtension(stub.api);
+		const modelSelect = stub.handlers.get("model_select");
+		if (!modelSelect) throw new Error("model_select handler was not registered");
+		const modelSelectDone = (async () => {
+			await modelSelect({ model, source: "set" }, ctx);
+			return true;
+		})();
+		const resolved = await Promise.race([
+			modelSelectDone,
+			new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 500)),
+		]);
+		assert.equal(resolved, true, "model_select must not block on the quota poll");
+		assert.equal(statuses.length >= 1, true);
+		assert.equal(/quota n\/a/.test(statuses[0] ?? ""), true);
+
+		fetchStub.release({
+			ok: true,
+			status: 200,
+			async json() {
+				return { five_hour: { utilization: 20 } };
+			},
+		});
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		assert.equal(/5h 80%/.test(statuses.at(-1) ?? ""), true);
+	} finally {
+		fetchStub.release({
+			ok: true,
+			status: 200,
+			async json() {
+				return { five_hour: { utilization: 20 } };
+			},
+		});
+		fetchStub.restore();
+		await storage.cleanup();
+	}
 });
 
 test("OpenAI Codex subscription usage parses quota windows", () => {
@@ -534,74 +395,45 @@ test("Anthropic subscription usage parses quota windows", () => {
 });
 
 test("subscription quota fetch uses Pi OAuth token for OpenAI Codex", async () => {
-	type FetchLike = (
-		input: string,
-		init?: { headers?: Record<string, string>; signal?: unknown },
-	) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
-	const globalWithFetch = globalThis as unknown as { fetch: FetchLike };
-	const originalFetch = globalWithFetch.fetch;
-	let requestedUrl = "";
-	let authorization = "";
-	globalWithFetch.fetch = async (input, init) => {
-		requestedUrl = input;
-		authorization = init?.headers?.authorization ?? "";
-		return {
-			ok: true,
-			status: 200,
-			async json() {
-				return {
-					rate_limit: {
-						primary_window: {
-							used_percent: 40,
-							reset_after_seconds: 300,
-						},
-					},
-				};
-			},
-		};
-	};
-	try {
-		const parsed = await fetchSubscriptionQuota(
-			{
-				ui: {
-					theme: { fg: (_color, text) => text },
-					notify() {
-						// no-op
-					},
-					setStatus() {
-						// no-op
+	const fetchStub = stubGlobalFetch(() => ({
+		ok: true,
+		status: 200,
+		async json() {
+			return {
+				rate_limit: {
+					primary_window: {
+						used_percent: 40,
+						reset_after_seconds: 300,
 					},
 				},
+			};
+		},
+	}));
+	try {
+		const parsed = await fetchSubscriptionQuota(
+			stubCtx({
 				modelRegistry: {
 					async getApiKeyForProvider(provider) {
 						assert.equal(provider, "openai-codex");
 						return "oauth-token";
 					},
 				},
-				hasUI: true,
-				mode: "tui",
-			},
+			}),
 			{ provider: "openai-codex", model: "gpt-5.5" },
 			Date.UTC(2026, 0, 1, 0, 0, 0),
 		);
 
-		assert.equal(requestedUrl, "https://chatgpt.com/backend-api/wham/usage");
-		assert.equal(authorization, "Bearer oauth-token");
+		assert.equal(fetchStub.requestedUrls[0], "https://chatgpt.com/backend-api/wham/usage");
+		assert.equal(fetchStub.lastInit?.headers?.authorization, "Bearer oauth-token");
 		assert.equal(parsed?.dimensions[0]?.remaining, 60);
 		assert.equal(parsed?.dimensions[0]?.resetAt, Date.UTC(2026, 0, 1, 0, 5, 0));
 	} finally {
-		globalWithFetch.fetch = originalFetch;
+		fetchStub.restore();
 	}
 });
 
 test("OpenAI Codex healthy zero uses CLI RPC fallback when available", async () => {
-	type FetchLike = (
-		input: string,
-		init?: { headers?: Record<string, string>; signal?: unknown },
-	) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
-	const globalWithFetch = globalThis as unknown as { fetch: FetchLike };
-	const originalFetch = globalWithFetch.fetch;
-	globalWithFetch.fetch = async () => ({
+	const fetchStub = stubGlobalFetch(() => ({
 		ok: true,
 		status: 200,
 		async json() {
@@ -620,7 +452,7 @@ test("OpenAI Codex healthy zero uses CLI RPC fallback when available", async () 
 				},
 			};
 		},
-	});
+	}));
 	try {
 		const parsed = await fetchOpenAICodexQuota(
 			"oauth-token",
@@ -653,122 +485,76 @@ test("OpenAI Codex healthy zero uses CLI RPC fallback when available", async () 
 		assert.equal(parsed?.dimensions[1]?.remaining, 64);
 		assert.equal(parsed?.metadata?.codexCliRpcFallback, true);
 	} finally {
-		globalWithFetch.fetch = originalFetch;
+		fetchStub.restore();
 	}
 });
 
 test("subscription quota fetch sends ChatGPT account header when OAuth JWT contains it", async () => {
-	type FetchLike = (
-		input: string,
-		init?: { headers?: Record<string, string>; signal?: unknown },
-	) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
-	const globalWithFetch = globalThis as unknown as { fetch: FetchLike };
-	const originalFetch = globalWithFetch.fetch;
-	let accountHeader = "";
-	globalWithFetch.fetch = async (_input, init) => {
-		accountHeader = init?.headers?.["ChatGPT-Account-Id"] ?? "";
-		return {
-			ok: true,
-			status: 200,
-			async json() {
-				return {
-					rate_limit: {
-						primary_window: {
-							used_percent: 40,
-							reset_after_seconds: 300,
-						},
-					},
-				};
-			},
-		};
-	};
-	try {
-		await fetchSubscriptionQuota(
-			{
-				ui: {
-					theme: { fg: (_color, text) => text },
-					notify() {
-						// no-op
-					},
-					setStatus() {
-						// no-op
+	const fetchStub = stubGlobalFetch(() => ({
+		ok: true,
+		status: 200,
+		async json() {
+			return {
+				rate_limit: {
+					primary_window: {
+						used_percent: 40,
+						reset_after_seconds: 300,
 					},
 				},
+			};
+		},
+	}));
+	try {
+		await fetchSubscriptionQuota(
+			stubCtx({
 				modelRegistry: {
 					async getApiKeyForProvider() {
 						return "header.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdF8xMjMifX0.sig";
 					},
 				},
-				hasUI: true,
-				mode: "tui",
-			},
+			}),
 			{ provider: "openai-codex", model: "gpt-5.5" },
 			Date.UTC(2026, 0, 1, 0, 0, 0),
 		);
 
-		assert.equal(accountHeader, "acct_123");
+		assert.equal(fetchStub.lastInit?.headers?.["ChatGPT-Account-Id"], "acct_123");
 	} finally {
-		globalWithFetch.fetch = originalFetch;
+		fetchStub.restore();
 	}
 });
 
 test("subscription quota fetch uses Pi OAuth token for Anthropic", async () => {
-	type FetchLike = (
-		input: string,
-		init?: { headers?: Record<string, string>; signal?: unknown },
-	) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
-	const globalWithFetch = globalThis as unknown as { fetch: FetchLike };
-	const originalFetch = globalWithFetch.fetch;
-	let requestedUrl = "";
-	let authorization = "";
-	let beta = "";
-	globalWithFetch.fetch = async (input, init) => {
-		requestedUrl = input;
-		authorization = init?.headers?.authorization ?? "";
-		beta = init?.headers?.["anthropic-beta"] ?? "";
-		return {
-			ok: true,
-			status: 200,
-			async json() {
-				return {
-					five_hour: {
-						utilization: 0.25,
-						resets_at: "2026-01-01T01:00:00Z",
-					},
-				};
-			},
-		};
-	};
+	const fetchStub = stubGlobalFetch(() => ({
+		ok: true,
+		status: 200,
+		async json() {
+			return {
+				five_hour: {
+					utilization: 0.25,
+					resets_at: "2026-01-01T01:00:00Z",
+				},
+			};
+		},
+	}));
 	try {
 		const parsed = await fetchSubscriptionQuota(
-			{
-				ui: {
-					theme: { fg: (_color, text) => text },
-					notify() {
-						// no-op
-					},
-					setStatus() {
-						// no-op
-					},
-				},
+			stubCtx({
 				modelRegistry: {
 					async getApiKeyForProvider(provider) {
 						assert.equal(provider, "anthropic");
 						return "oauth-token";
 					},
 				},
-				hasUI: true,
-				mode: "tui",
-			},
+			}),
 			{ provider: "anthropic", model: "claude-sonnet-4" },
 			Date.UTC(2026, 0, 1, 0, 0, 0),
 		);
 
-		assert.equal(requestedUrl, "https://api.anthropic.com/api/oauth/usage");
-		assert.equal(authorization, "Bearer oauth-token");
-		assert.equal(beta, "oauth-2025-04-20");
+		assert.equal(fetchStub.requestedUrls[0], "https://api.anthropic.com/api/oauth/usage");
+		assert.equal(fetchStub.lastInit?.headers?.authorization, "Bearer oauth-token");
+		assert.equal(fetchStub.lastInit?.headers?.["anthropic-beta"], "oauth-2025-04-20");
 		assert.equal(parsed?.dimensions[0]?.remaining, 75);
 	} finally {
-		globalWithFetch.fetch = originalFetch;
+		fetchStub.restore();
 	}
 });
