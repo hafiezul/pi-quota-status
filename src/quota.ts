@@ -248,24 +248,22 @@ export function selectFooterQuotaForModel(
 		ref,
 		now,
 	);
-	const segments = dimensions
-		.map((dimension): FooterQuotaSegment | undefined => {
-			const percentRemaining = calculatePercent(
-				dimension.remaining,
-				dimension.limit,
-			);
-			return percentRemaining === undefined
-				? undefined
-				: { dimension, percentRemaining };
-		})
-		.filter((segment): segment is FooterQuotaSegment => Boolean(segment));
+	const segments: FooterQuotaSegment[] = [];
+	let minimum = Number.POSITIVE_INFINITY;
+	for (const dimension of dimensions) {
+		const percentRemaining = calculatePercent(
+			dimension.remaining,
+			dimension.limit,
+		);
+		if (percentRemaining === undefined) continue;
+		segments.push({ dimension, percentRemaining });
+		minimum = Math.min(minimum, percentRemaining);
+	}
 	if (segments.length === 0) return undefined;
 	return {
 		observation,
 		segments,
-		percentRemaining: Math.min(
-			...segments.map((segment) => segment.percentRemaining),
-		),
+		percentRemaining: minimum,
 	};
 }
 
@@ -494,9 +492,13 @@ function selectableObservationForModel(
 ): QuotaObservation | undefined {
 	const key = modelKey(ref.provider, ref.model);
 	const stateObservation = state.observations[key];
-	const adapter = selectAdapter(config, ref.provider, ref.model);
 	return stateObservation?.source === "fallback"
-		? buildFallbackObservation(ref, adapter, stateObservation, now)
+		? buildFallbackObservation(
+				ref,
+				selectAdapter(config, ref.provider, ref.model),
+				stateObservation,
+				now,
+			)
 		: freshHeaderObservation(stateObservation, now);
 }
 
