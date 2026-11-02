@@ -211,11 +211,19 @@ function pad(value: string, width: number): string {
 	return value + " ".repeat(Math.max(0, width - value.length));
 }
 
+let smallMetricFormatter: Intl.NumberFormat | undefined;
+let metricFormatter: Intl.NumberFormat | undefined;
+
 function formatMetricNumber(value: number): string {
-	return value.toLocaleString("en-US", {
-		minimumFractionDigits: value < 100 ? 2 : 0,
-		maximumFractionDigits: 2,
-	});
+	return (value < 100
+		? (smallMetricFormatter ??= new Intl.NumberFormat("en-US", {
+				minimumFractionDigits: 2,
+				maximumFractionDigits: 2,
+			}))
+		: (metricFormatter ??= new Intl.NumberFormat("en-US", {
+				minimumFractionDigits: 0,
+				maximumFractionDigits: 2,
+			}))).format(value);
 }
 
 export function formatRowsAsTable(rows: QuotaRow[]): string {

@@ -36,9 +36,12 @@ export function findDimensionByNames<T extends QuotaDimensionLike>(
 export function findCurrentDimensionByNames<
 	T extends ObservedQuotaDimensionLike,
 >(dimensions: T[], names: string[], now: number): T | undefined {
-	return findDimensionByNames(
-		dimensions.filter((dimension) => !dimensionExpired(dimension, now)),
-		names,
+	const normalizedNames = new Set(names.map(normalizedDimensionName));
+	return dimensions.find(
+		(dimension) =>
+			!dimensionExpired(dimension, now) &&
+			normalizedNames.has(normalizedDimensionName(dimension.name)) &&
+			dimensionPercentRemaining(dimension) !== undefined,
 	);
 }
 

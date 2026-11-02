@@ -799,3 +799,22 @@ test("fallback recomputes after reset window passes", () => {
 	assert.equal(later?.dimension.remaining, 5);
 	assert.equal(later?.percentRemaining, 100);
 });
+
+test("provider footer preserves valid dimension order and minimum", () => {
+	const config = normalizeConfig({ adapters: [] });
+	const state: QuotaState = { version: 1, observations: {} };
+	const ref = { provider: "example", model: "model" };
+	upsertObservation(state, observationFromParsed(ref, { name: "example" }, {
+		dimensions: [
+			{ name: "first", limit: 100, remaining: 80 },
+			{ name: "expired", limit: 100, remaining: 1, resetAt: now },
+			{ name: "last", limit: 100, remaining: 25 },
+		],
+	}, "provider", 200, now));
+	const selected = selectFooterQuotaForModel(state, config, ref, now);
+	assert.deepEqual(
+		selected?.segments.map((segment) => [segment.dimension.name, segment.percentRemaining]),
+		[["first", 80], ["last", 25]],
+	);
+	assert.equal(selected?.percentRemaining, 25);
+});

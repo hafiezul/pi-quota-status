@@ -90,3 +90,18 @@ test("compact footer renders multiple quota windows", () => {
 		"5h 78% 1:57PM · Wk 30% 8:57AM (28/06)",
 	);
 });
+
+test("provider metrics preserve boundary, rounding, and grouping", () => {
+	const metric = {
+		name: "balance", unit: "USD", observedAt: 0, source: "provider",
+	} as const;
+	for (const [value, expected] of [
+		[99.994, "$99.99"],
+		[99.999, "$100.00"],
+		[100, "$100"],
+		[100.125, "$100.13"],
+		[1234.5, "$1,234.5"],
+	] as const) {
+		assert.equal(formatProviderMetric({ ...metric, value }), expected);
+	}
+});
