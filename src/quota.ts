@@ -324,7 +324,7 @@ function selectFooterDimensionsForObservation(
 		);
 		return selected ? [selected] : [];
 	}
-	if (ref.provider === "openai-codex")
+	if (ref.provider === "openai" || ref.provider === "openai-codex")
 		return compactDimensionsByName(
 			observation.dimensions,
 			["5h", "weekly"],

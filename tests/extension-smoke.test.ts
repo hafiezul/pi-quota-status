@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import quotaStatusExtension from "../src/index.js";
 import {
@@ -558,3 +558,107 @@ test("subscription quota fetch uses Pi OAuth token for Anthropic", async () => {
 		fetchStub.restore();
 	}
 });
+
+const openAIRateHeaders = {
+	"x-ratelimit-limit-requests": "500",
+	"x-ratelimit-remaining-requests": "499",
+	"x-ratelimit-reset-requests": "120ms",
+	"x-ratelimit-limit-tokens": "100000",
+	"x-ratelimit-remaining-tokens": "99000",
+	"x-ratelimit-reset-tokens": "1s",
+};
+
+for (const expired of [false, true]) {
+	for (const provider of ["openai", "openai-codex"]) {
+		test(`${provider} OAuth ${expired ? "expired windows allow headers" : "fresh windows survive response headers"} under its own identity`, async () => {
+			const storage = await useTempQuotaDir();
+			const model = { provider, id: "gpt-5.5" };
+			const statuses: Array<string | undefined> = [];
+			const token = "header.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdF8xMjMifX0.sig";
+			const fetchStub = stubGlobalFetch(() => ({
+				ok: true, status: 200,
+				async json() {
+					return { rate_limit: {
+						primary_window: { used_percent: 40, reset_at: new Date(Date.now() + (expired ? -60_000 : 3_600_000)).toISOString() },
+						secondary_window: { used_percent: 20, reset_at: new Date(Date.now() + (expired ? -60_000 : 86_400_000)).toISOString() },
+					} };
+				},
+			}));
+			const ctx = stubCtx({ model, statuses, modelRegistry: {
+				isUsingOAuth: () => true,
+				async getApiKeyForProvider(requested) {
+					assert.equal(requested, provider);
+					return token;
+				},
+			} });
+			const stub = stubPi();
+			quotaStatusExtension(stub.api);
+			try {
+				await stub.commands.get("quota")?.handler("reload", ctx);
+				assert.equal(fetchStub.requestedUrls[0], "https://chatgpt.com/backend-api/wham/usage");
+				assert.equal(fetchStub.lastInit?.headers?.authorization, `Bearer ${token}`);
+				assert.equal(fetchStub.lastInit?.headers?.["ChatGPT-Account-Id"], "acct_123");
+				if (!expired) assert.ok(/5h.*60%.*Wk.*80%/.test(statuses.at(-1) ?? ""));
+				await stub.handlers.get("after_provider_response")?.({ status: 200, headers: openAIRateHeaders }, ctx);
+				const state = JSON.parse(await readFile(join(storage.dir, "state.json"), "utf8"));
+				const observation = state.observations[`${provider}/gpt-5.5`];
+				assert.equal(observation.provider, provider);
+				assert.equal(observation.model, "gpt-5.5");
+				// Codex keeps its existing response-header behavior.
+				const protectedWindows = provider === "openai" && !expired;
+				assert.equal(observation.source, protectedWindows ? "subscription" : "headers");
+				if (protectedWindows) {
+					assert.ok(/5h.*60%.*Wk.*80%/.test(statuses.at(-1) ?? ""));
+					assert.deepEqual(observation.dimensions.map((dimension: { name: string }) => dimension.name), ["5h", "weekly"]);
+				} else {
+					assert.ok(/Tok.*99%/.test(statuses.at(-1) ?? ""));
+				}
+				await stub.commands.get("quota")?.handler("debug", ctx);
+				assert.ok((stub.messages.at(-1) ?? "").includes(`Active model: ${provider}/gpt-5.5`));
+			} finally {
+				fetchStub.restore();
+				await storage.cleanup();
+			}
+		});
+	}
+}
+
+for (const scenario of ["missing", "failure", "api-key"]) {
+	test(`OpenAI ${scenario} preserves unavailable footer and excludes API keys from ChatGPT`, async () => {
+		const storage = await useTempQuotaDir();
+		const statuses: Array<string | undefined> = [];
+		const fetchStub = stubGlobalFetch(() => ({
+			ok: false, status: 401, async json() { return {}; },
+		}));
+		const ctx = stubCtx({ model: { provider: "openai", id: "gpt-5.5" }, statuses,
+			modelRegistry: {
+				isUsingOAuth: () => scenario !== "api-key",
+				async getApiKeyForProvider() {
+					return scenario === "missing" ? undefined : "fake-credential";
+				},
+			},
+		});
+		const stub = stubPi();
+		quotaStatusExtension(stub.api);
+		try {
+			await stub.commands.get("quota")?.handler("reload", ctx);
+			assert.equal(statuses.at(-1), scenario === "api-key" ? "quota n/a" : "quota n/a (sub)");
+			if (scenario !== "failure") {
+				assert.ok(!fetchStub.requestedUrls.some((url) => url.includes("chatgpt.com")));
+			} else {
+				assert.ok(fetchStub.requestedUrls.some((url) => url.includes("chatgpt.com")));
+			}
+			if (scenario === "api-key") {
+				assert.equal(await fetchSubscriptionQuota(ctx, { provider: "openai", model: "gpt-5.5" }), undefined);
+				assert.deepEqual(fetchStub.requestedUrls, ["https://api.openai.com/v1/dashboard/billing/credit_grants"]);
+			}
+			await stub.handlers.get("after_provider_response")?.({ status: 200, headers: openAIRateHeaders }, ctx);
+			assert.ok(/Tok.*99%/.test(statuses.at(-1) ?? ""));
+			const state = JSON.parse(await readFile(join(storage.dir, "state.json"), "utf8"));
+			assert.equal(state.observations["openai/gpt-5.5"].source, "headers");
+		} finally {
+			fetchStub.restore();
+			await storage.cleanup();
+		}
+	});
+}

@@ -14,6 +14,7 @@ It uses its own `ctx.ui.setStatus("pi-quota-status", ...)` slot, so Pi's default
 ## Supported quota sources
 
 - Anthropic `/login` models (`anthropic/claude-*`): native subscription polling, response-header parsing, and optional fixed-window fallback.
+- OpenAI `/login` with **Sign in with ChatGPT** (`openai/*`) uses the same subscription quota polling and 5h + weekly footer as OpenAI Codex. API-key OpenAI keeps credit-grant polling; its key is never sent to ChatGPT.
 - OpenAI Codex `/login` models (`openai-codex/*`): native polling from the ChatGPT Codex usage endpoint, with local Codex CLI RPC reconciliation when the endpoint reports a healthy-but-stale 5h zero.
 - Antigravity (`antigravity/*`): native polling through Pi-resolved credentials. The extension reads the active runtime model quota from Antigravity's available-models endpoint.
 - Command Code (`commandcode/*`): native polling through Pi-resolved credentials. The footer can show Command Code's 5h and weekly windows.
@@ -94,7 +95,7 @@ State writes use a small lock plus atomic rename so concurrent Pi sessions merge
 
 If `config.json` is absent, the extension uses built-in defaults at runtime. Running `/quota config` creates an editable template with enabled Anthropic and generic OpenAI header adapters.
 
-Anthropic and OpenAI Codex native subscription polling do not require config adapter entries; they run whenever the active supported provider/model is using `/login` OAuth and Pi can provide the OAuth token. Antigravity, Command Code, DeepSeek, Fireworks, Groq, Hugging Face, Moonshot, Kimi Coding, MiniMax, OpenCode Go, OpenAI API, OpenRouter, xAI, and Z.AI native polling also require no adapter entry; they use authentication resolved by Pi's model registry.
+Anthropic, OpenAI ChatGPT, and OpenAI Codex native subscription polling do not require config adapter entries; they run whenever the active supported provider/model is using `/login` OAuth and Pi can provide the OAuth token. Antigravity, Command Code, DeepSeek, Fireworks, Groq, Hugging Face, Moonshot, Kimi Coding, MiniMax, OpenCode Go, OpenAI API, OpenRouter, xAI, and Z.AI native polling also require no adapter entry; they use authentication resolved by Pi's model registry.
 
 Read the [configuration reference](docs/configuration.md) for:
 

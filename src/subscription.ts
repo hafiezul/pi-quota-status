@@ -31,7 +31,7 @@ const ANTHROPIC_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 const ANTHROPIC_OAUTH_BETA = "oauth-2025-04-20";
 
 export function supportsSubscriptionQuotaProvider(provider: string): boolean {
-	return provider === OPENAI_CODEX_PROVIDER || provider === ANTHROPIC_PROVIDER;
+	return provider === "openai" || provider === OPENAI_CODEX_PROVIDER || provider === ANTHROPIC_PROVIDER;
 }
 
 export function extractChatGPTAccountId(token: string): string | undefined {
@@ -51,9 +51,15 @@ export async function fetchSubscriptionQuota(
 	now = Date.now(),
 ): Promise<ParsedQuotaObservation | undefined> {
 	if (!supportsSubscriptionQuotaProvider(ref.provider)) return undefined;
+	if (ref.provider === "openai") {
+		const model = ctx.model?.provider === ref.provider && ctx.model.id === ref.model
+			? ctx.model
+			: ctx.modelRegistry.find?.(ref.provider, ref.model);
+		if (!model || !ctx.modelRegistry.isUsingOAuth?.(model)) return undefined;
+	}
 	const token = await ctx.modelRegistry.getApiKeyForProvider?.(ref.provider);
 	if (!token) return undefined;
-	if (ref.provider === OPENAI_CODEX_PROVIDER)
+	if (ref.provider === "openai" || ref.provider === OPENAI_CODEX_PROVIDER)
 		return fetchOpenAICodexQuota(token, now);
 	return fetchAnthropicQuota(token, now);
 }

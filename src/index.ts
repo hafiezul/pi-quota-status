@@ -351,7 +351,8 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 					);
 					if (
 						existing?.source === "subscription" &&
-						ref.provider === "anthropic" &&
+						(ref.provider === "anthropic" ||
+							(ref.provider === "openai" && isUsingOAuth(ctx, ref))) &&
 						hasFreshSubscription
 					)
 						return;

@@ -200,7 +200,7 @@ function isCodexSubscriptionObservation(
 	observation: QuotaObservation,
 ): boolean {
 	return (
-		observation.provider === OPENAI_CODEX_PROVIDER &&
+		(observation.provider === "openai" || observation.provider === OPENAI_CODEX_PROVIDER) &&
 		observation.source === "subscription"
 	);
 }
