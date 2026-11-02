@@ -1,0 +1,15 @@
+Baseline: 735af1e381258b7115df025361c79d748b9de88b
+HEAD: 8204e1b85f183758ba9d1b417a0a3adda9e94a8c; optimized inputs: working-tree src files
+PASS: 98001 assertions, including differential equality and expected operation counts.
+Frozen now: 1767225600000; TZ: UTC
+Expiration reads (baseline, optimized): [1000,1]
+Locale calls (baseline, optimized): [1000,0]
+Adapter getter reads (baseline, optimized): {"provider":[1,0],"subscription":[1,0],"fallback":[1,1]}
+Formatter constructors at import (baseline, optimized): 0, 0
+Optimized formatter constructors: 0 at import; 1 after first small value; 1 after reuse; 2 after first large value; 2 after reuse. All asserted.
+Fake-data footer, equal in both versions: 5h 70% · Son 20%
+Expiration proxy counts resetAt getter reads in 1000 dimensions, with the first named 5h and all resetAt values undefined.
+Locale proxy counts Number.prototype.toLocaleString calls for 1000 USD metrics with value 12.5. It does not count ICU work.
+Adapter proxy counts config.adapters getter reads for one footer selection per source. It does not measure adapter or network execution.
+Constructor proxy counts Intl.NumberFormat construction, not allocations inside ICU.
+No elapsed time measured. Synthetic fixtures only; live APIs and host runtime integration unverified.
