@@ -1,0 +1,9 @@
+Plot prerequisites: python unavailable; python3 matplotlib unavailable; python3 Pillow 12.1.1 available.
+npm run typecheck: PASS (exit 0)
+npm test: PASS (exit 0)
+
+npm run check:fetch: PASS (exit 0)
+git diff --check: PASS (exit 0)
+node .audit/optimization-proof/verify.mjs: PASS (exit 0)
+python3 .audit/optimization-proof/chart.py: PASS (exit 0)
+npm test ran from an OS temporary source/config copy with shared node_modules; emitted test files removed with the temporary directory.
