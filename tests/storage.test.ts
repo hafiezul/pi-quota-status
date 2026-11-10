@@ -89,3 +89,72 @@ test("state pruning is idempotent under repeated normalization", () => {
 	assert.deepEqual(second, first);
 	assert.deepEqual(Object.keys(second.observations), []);
 });
+
+test("state loading discards malformed observations while preserving valid data", () => {
+	const valid: QuotaState["observations"][string] = {
+		...observation(now),
+		adapter: "subscription",
+		status: 200,
+		dimensions: [{ name: "5h", limit: 100, remaining: 80, resetAt: now + dayMs, observedAt: now, source: "subscription" }],
+		metrics: [{ name: "balance", value: 10, unit: "USD", observedAt: now, source: "provider" }],
+		metadata: {
+			accountHeaderSent: true,
+			allowed: true,
+			limitReached: false,
+			rateLimitReachedType: null,
+			codexCliRpcFallback: true,
+			extraLimits: [{ name: "extra", usedPercent: 20, remaining: 80, resetAt: now + dayMs }],
+		},
+	};
+	const state = normalizeState(
+		{
+			observations: {
+				valid,
+				null: null,
+				missingDimensions: { ...valid, dimensions: undefined },
+				invalidDimension: { ...valid, dimensions: [null] },
+				invalidNumber: {
+					...valid,
+					dimensions: [
+						{
+							name: "5h",
+							remaining: "80",
+							observedAt: now,
+							source: "subscription",
+						},
+					],
+				},
+				invalidMetric: {
+					...valid,
+					metrics: [{ name: "balance", value: 10, unit: null }],
+				},
+				invalidMetadata: { ...valid, metadata: { extraLimits: [null] } },
+				invalidFallback: { ...valid, source: "fallback", dimensions: {} },
+			},
+		},
+		now,
+	);
+	assert.deepEqual(state.observations, { valid });
+});
+
+test("state loading rejects malformed pending confirmations", () => {
+	const valid = {
+		observation: observation(now),
+		reason: "drop",
+		createdAt: now,
+		updatedAt: now,
+	};
+	const state = normalizeState(
+		{
+			observations: {},
+			pendingObservations: {
+				valid,
+				missingObservation: { createdAt: now },
+				invalidObservation: { ...valid, observation: { updatedAt: now } },
+				invalidNumber: { ...valid, priorRemaining: "99" },
+			},
+		},
+		now,
+	);
+	assert.deepEqual(state.pendingObservations, { valid });
+});

@@ -527,6 +527,8 @@ function buildFallbackObservation(
 	if (!Number.isFinite(fallback.limit) || fallback.limit <= 0) return undefined;
 	if (!Number.isFinite(fallback.windowSeconds) || fallback.windowSeconds <= 0)
 		return undefined;
+	const windowMs = fallback.windowSeconds * 1000;
+	if (!Number.isFinite(windowMs) || windowMs < 1) return undefined;
 	const dimensionName = fallback.dimension ?? "requests";
 	const previous =
 		existing?.source === "fallback"
@@ -571,7 +573,8 @@ function computeCurrentResetAt(
 		previousResetAt ??
 		parseConfiguredResetAt(fallback.resetAt) ??
 		Math.floor(now / windowMs) * windowMs + windowMs;
-	while (resetAt <= now) resetAt += windowMs;
+	if (resetAt <= now)
+		resetAt += (Math.floor((now - resetAt) / windowMs) + 1) * windowMs;
 	return resetAt;
 }
 

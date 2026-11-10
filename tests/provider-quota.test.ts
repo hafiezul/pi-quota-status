@@ -162,6 +162,24 @@ test("Groq Prometheus scalar sums series samples", () => {
 	);
 });
 
+test("Groq rate conversion rejects overflow instead of replacing trusted data", async () => {
+	const model = { provider: "groq", id: "quota-fixture" };
+	const ctx = stubCtx({ model, modelRegistry: {
+		async getApiKeyForProvider() { return "fixture-token"; },
+	} });
+	const healthy = await fetchProviderQuota(ctx, { provider: model.provider, model: model.id }, Date.now(), async () =>
+		Response.json({ status: "success", data: { result: [{ value: [1, "2"] }] } }),
+	);
+	assert.deepEqual(healthy?.parsed.metrics, [
+		{ name: "requests", value: 120, unit: "req/min" },
+		{ name: "tokens", value: 240, unit: "tok/min" },
+	]);
+	const result = await fetchProviderQuota(ctx, { provider: model.provider, model: model.id }, Date.now(), async () =>
+		Response.json({ status: "success", data: { result: [{ value: [1, "1e308"] }] } }),
+	);
+	assert.equal(result, undefined);
+});
+
 test("Hugging Face billing maps monthly spend limit and ZeroGPU quota", () => {
 	const parsed = parseHuggingFaceUsage({
 		usage: {

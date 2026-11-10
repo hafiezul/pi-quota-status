@@ -23,6 +23,7 @@ test("extension timers unref so a host can exit without session_shutdown", async
 			}),
 		);
 		const probe = `
+			globalThis.fetch = async () => ({ ok: true, status: 200, async json() { return {}; } });
 			const { default: quotaStatusExtension } = await import(${JSON.stringify(join(process.cwd(), ".tmp-test/src/index.js"))});
 			const handlers = new Map();
 			quotaStatusExtension({
