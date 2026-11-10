@@ -1,5 +1,5 @@
 export function asRecord(value: unknown): Record<string, unknown> | undefined {
-	return value && typeof value === "object"
+	return value && typeof value === "object" && !Array.isArray(value)
 		? (value as Record<string, unknown>)
 		: undefined;
 }
@@ -22,12 +22,6 @@ export function numberValue(value: unknown): number | undefined {
 	if (typeof value !== "string" || !value.trim()) return undefined;
 	const parsed = Number(value);
 	return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-export function normalizedUsedPercent(value: unknown): number | undefined {
-	const parsed = numberValue(value);
-	if (parsed === undefined) return undefined;
-	return parsed >= 0 && parsed <= 1 ? parsed * 100 : parsed;
 }
 
 export function nullableStringValue(value: unknown): string | null | undefined {

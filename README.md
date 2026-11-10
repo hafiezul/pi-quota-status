@@ -123,6 +123,8 @@ Read the [configuration reference](docs/configuration.md) for:
 
 ## Release flow
 
+See [provider verification](docs/testing.md) for the credential-free disposable Pi tests, public fixture sources, and live-testing limits.
+
 For maintainers:
 
 - `npm version <patch|minor|major>` runs the test suite through `preversion`, bumps the version, and pushes main plus the tag through `postversion`.

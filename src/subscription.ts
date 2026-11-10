@@ -11,7 +11,6 @@ import {
 	asRecord,
 	booleanValue,
 	firstDefined,
-	normalizedUsedPercent,
 	nullableStringValue,
 	numberValue,
 	stringValue,
@@ -273,7 +272,7 @@ function parseAnthropicWindow(
 	now: number,
 ): ParsedQuotaDimension | undefined {
 	if (!window) return undefined;
-	const usedPercent = normalizedUsedPercent(
+	const usedPercent = numberValue(
 		window.utilization ??
 			window.used_percent ??
 			window.usedPercent ??

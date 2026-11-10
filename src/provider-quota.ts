@@ -630,6 +630,7 @@ async function fetchGroqUsage({
 			unit: "tok/min",
 		});
 	}
+	if (metrics.some((metric) => !Number.isFinite(metric.value))) return undefined;
 	return metrics.length > 0 ? { dimensions: [], metrics } : undefined;
 }
 

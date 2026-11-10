@@ -15,6 +15,8 @@ Global files are kept separate:
 
 State writes use a small lock plus atomic rename so concurrent Pi sessions merge state instead of overwriting the whole file blindly.
 
+State loading validates observations and pending confirmations. Malformed entries are discarded while valid entries are preserved.
+
 ## Config schema
 
 If `config.json` is absent, the extension uses built-in defaults at runtime. Running `/quota config` creates an editable template file with both an enabled Anthropic adapter and an enabled generic OpenAI header adapter.
@@ -53,6 +55,10 @@ Adapter fields:
 ```
 
 Matching uses `provider` plus model globs. `*` and `?` are supported.
+
+Omitting `adapters` uses the built-in header adapters. Setting `adapters: []` disables all header and fallback adapters; native provider polling still runs. Malformed adapter entries are ignored, including entries with invalid nested header mappings or fallback settings.
+
+`refreshIntervalMs` must be between 1 and 2147483647 milliseconds. Invalid values use the 60000-millisecond default. `/quota reload` applies changes to this interval immediately. Alert thresholds accept percentages from 0 to 100; setting both thresholds to 0 disables warning and critical colors.
 
 ## Adding missing default adapters
 
@@ -107,7 +113,7 @@ Header parsing ships with:
 
 These adapters parse provider response headers only. Anthropic and OpenAI Codex `/login` quota windows are handled by subscription polling, not by the generic OpenAI header adapter.
 
-Adapters are evaluated only after Pi reports that the active model uses OAuth subscription auth from `/login`. API-key and custom-key providers are ignored even if their headers match an adapter.
+Header adapters run for any matching provider/model, including API-key and custom-key authentication.
 
 Generic mappings use named fields only; no user-supplied JavaScript parser functions are executed.
 
@@ -155,6 +161,8 @@ When provider headers are absent, an adapter can declare a fixed-window fallback
 ```
 
 After the reset time passes, fallback observations recompute the next fixed window. Header-only observations are hidden from the footer after their reset time until fresh headers arrive.
+
+Fallback windows must be at least one millisecond (`windowSeconds: 0.001`). Elapsed windows advance directly to the next boundary while preserving the configured reset alignment.
 
 ## Quota polling
 

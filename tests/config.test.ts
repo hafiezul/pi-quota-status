@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import {
 	ensureConfigTemplate,
 	loadConfig,
@@ -22,6 +23,69 @@ import {
 import type { QuotaState, QuotaStatusConfig } from "../src/types.js";
 
 const now = Date.UTC(2026, 0, 1, 0, 0, 0);
+
+test("an explicit empty adapter list disables header and fallback adapters", () => {
+	const config = normalizeConfig({ adapters: [] });
+	assert.equal(
+		selectAdapter(config, "anthropic", "claude-sonnet-4"),
+		undefined,
+	);
+	assert.deepEqual(config.adapters, []);
+});
+
+test("config loading ignores malformed adapters without broadening their matches", () => {
+	const config = normalizeConfig(
+		JSON.parse(
+			JSON.stringify({
+				adapters: [
+					null,
+					{ provider: 42 },
+					{ models: [42] },
+					{ headers: { remaining: [null] } },
+					{ dimensions: [null] },
+					{ fallback: { limit: 5, windowSeconds: "3600" } },
+					{ name: "valid", provider: "custom" },
+				],
+			}),
+		),
+	);
+	assert.deepEqual(
+		config.adapters?.map((adapter) => adapter.name),
+		["valid"],
+	);
+	assert.equal(selectAdapter(config, "other", "model"), undefined);
+});
+
+test("config bounds prevent timer overflow and allow zero alert thresholds", () => {
+	const config = normalizeConfig({
+		refreshIntervalMs: 2 ** 31,
+		warningThreshold: 0,
+		criticalThreshold: 0,
+	});
+	assert.equal(config.refreshIntervalMs, 60_000);
+	assert.equal(config.warningThreshold, 0);
+	assert.equal(config.criticalThreshold, 0);
+});
+
+test("fallback skips elapsed windows without blocking and preserves reset alignment", () => {
+	const probe = `
+		import { ensureFallbackObservation } from ${JSON.stringify(join(process.cwd(), ".tmp-test/src/quota.js"))};
+		const result = ensureFallbackObservation(
+			{ version: 1, observations: {} },
+			{ adapters: [{ fallback: { limit: 5, windowSeconds: 0.001, resetAt: 1_600_000_000_000 } }] },
+			{ provider: "custom", model: "model" },
+			${now},
+		);
+		console.log(result.dimensions[0].resetAt);
+	`;
+	const result = spawnSync(
+		process.execPath,
+		["--input-type=module", "-e", probe],
+		{ timeout: 1_000 },
+	);
+	assert.equal(result.status, 0, result.stderr.toString());
+	assert.equal(result.stdout.toString().trim(), String(now + 1));
+});
 
 async function createTempDir(): Promise<string> {
 	const dir = [

@@ -30,6 +30,132 @@ test("extension registers expected events and /quota command", () => {
 	assert.ok(stub.commands.has("quota"));
 });
 
+test("/quota reload applies a changed polling interval", async () => {
+	const storage = await useTempQuotaDir();
+	const stub = stubPi();
+	let reloaded = false;
+	let resolvePolled!: () => void;
+	const polled = new Promise<boolean>((resolve) => {
+		resolvePolled = () => resolve(true);
+	});
+	const fetchStub = stubGlobalFetch(() => {
+		if (reloaded) resolvePolled();
+		return {
+			ok: true,
+			status: 200,
+			async json() {
+				return {};
+			},
+		};
+	});
+	const ctx = stubCtx({
+		model: { provider: "openrouter", id: "model" },
+		modelRegistry: {
+			async getApiKeyForProvider() {
+				return "key";
+			},
+		},
+	});
+	quotaStatusExtension(stub.api);
+	let timeout: ReturnType<typeof setTimeout> | undefined;
+	try {
+		await stub.handlers.get("session_start")!({}, ctx);
+		await writeFile(
+			join(storage.dir, "config.json"),
+			JSON.stringify({ refreshIntervalMs: 20 }),
+		);
+		await stub.commands.get("quota")!.handler("reload", ctx);
+		// The next poll must be scheduled by the reloaded interval, not the old 60s timer.
+		reloaded = true;
+		const result = await Promise.race([
+			polled,
+			new Promise<boolean>((resolve) => {
+				timeout = setTimeout(() => resolve(false), 1_000);
+			}),
+		]);
+		assert.equal(result, true, "the reloaded interval did not poll");
+	} finally {
+		if (timeout) clearTimeout(timeout);
+		await stub.handlers.get("session_shutdown")!({}, ctx);
+		fetchStub.restore();
+		await storage.cleanup();
+	}
+});
+
+test("switching models refreshes quota while the previous model is still polling", async () => {
+	const storage = await useTempQuotaDir();
+	const stub = stubPi();
+	let releaseFirst!: () => void;
+	const firstResponse = new Promise<void>((resolve) => {
+		releaseFirst = resolve;
+	});
+	let resolveStarted!: () => void;
+	const started = new Promise<void>((resolve) => {
+		resolveStarted = resolve;
+	});
+	const fetchStub = stubGlobalFetch(async (url) => {
+		if (url.includes("anthropic.com")) {
+			resolveStarted();
+			await firstResponse;
+		}
+		return {
+			ok: true,
+			status: 200,
+			async json() {
+				return { data: { limit: 100, limit_remaining: 50 } };
+			},
+		};
+	});
+	const firstModel = { provider: "anthropic", id: "claude-sonnet-4" };
+	const secondModel = { provider: "openrouter", id: "model" };
+	let resolveRefreshed!: () => void;
+	const refreshed = new Promise<boolean>((resolve) => {
+		resolveRefreshed = () => resolve(true);
+	});
+	const registry = {
+		isUsingOAuth() {
+			return true;
+		},
+		async getApiKeyForProvider() {
+			return "key";
+		},
+	};
+	const firstCtx = stubCtx({ model: firstModel, modelRegistry: registry });
+	const secondCtx = stubCtx({
+		model: secondModel,
+		modelRegistry: registry,
+		onStatus(text) {
+			if (text?.includes("50%")) resolveRefreshed();
+		},
+	});
+	quotaStatusExtension(stub.api);
+	let timeout: ReturnType<typeof setTimeout> | undefined;
+	try {
+		await stub.handlers.get("session_start")!({}, firstCtx);
+		await started;
+		await stub.handlers.get("model_select")!({ model: firstModel }, firstCtx);
+		await stub.handlers.get("model_select")!({ model: secondModel }, secondCtx);
+		const result = await Promise.race([
+			refreshed,
+			new Promise<boolean>((resolve) => {
+				timeout = setTimeout(() => resolve(false), 1_000);
+			}),
+		]);
+		assert.equal(
+			result,
+			true,
+			"the previous model's poll blocked the selected model",
+		);
+		assert.equal(fetchStub.requestedUrls.length, 2);
+	} finally {
+		if (timeout) clearTimeout(timeout);
+		await stub.handlers.get("session_shutdown")!({}, secondCtx);
+		releaseFirst();
+		fetchStub.restore();
+		await storage.cleanup();
+	}
+});
+
 test("session start renders saved quota before subscription refresh finishes", async () => {
 	const storage = await useTempQuotaDir();
 	await writeFile(
@@ -166,22 +292,27 @@ test("/quota status explains subscription quota unavailability", async () => {
 });
 
 test("custom key models show header quota", async () => {
-	const stub = stubPi();
-	quotaStatusExtension(stub.api);
-	const statuses: Array<string | undefined> = [];
-	const ctx = stubCtx({
-		model: { provider: "openai", id: "gpt-5.5" },
-		modelRegistry: { isUsingOAuth() { return false; } },
-		statuses,
-	});
-	await stub.handlers.get("after_provider_response")!(
-		{ status: 200, headers: {
-			"x-ratelimit-limit-requests": "100",
-			"x-ratelimit-remaining-requests": "72",
-		} },
-		ctx,
-	);
-	assert.deepEqual(statuses, ["Req 72%"]);
+	const storage = await useTempQuotaDir();
+	try {
+		const stub = stubPi();
+		quotaStatusExtension(stub.api);
+		const statuses: Array<string | undefined> = [];
+		const ctx = stubCtx({
+			model: { provider: "openai", id: "gpt-5.5" },
+			modelRegistry: { isUsingOAuth() { return false; } },
+			statuses,
+		});
+		await stub.handlers.get("after_provider_response")!(
+			{ status: 200, headers: {
+				"x-ratelimit-limit-requests": "100",
+				"x-ratelimit-remaining-requests": "72",
+			} },
+			ctx,
+		);
+		assert.deepEqual(statuses, ["Req 72%"]);
+	} finally {
+		await storage.cleanup();
+	}
 });
 
 test("providers without quota data clear extension status", async () => {
@@ -367,6 +498,15 @@ test("OpenAI Codex account id is extracted from OAuth JWT", () => {
 	assert.equal(extractChatGPTAccountId("not-a-jwt"), undefined);
 });
 
+test("Anthropic OAuth utilization uses percentage points even at or below one", () => {
+	const parsed = parseAnthropicUsage({
+		five_hour: { utilization: 1 },
+		seven_day: { utilization: 0.5 },
+		seven_day_sonnet: { utilization: 0 },
+	});
+	assert.deepEqual(parsed?.dimensions.map((dimension) => dimension.remaining), [99, 99.5, 100]);
+});
+
 test("Anthropic subscription usage parses quota windows", () => {
 	const parsed = parseAnthropicUsage(
 		{
@@ -391,7 +531,7 @@ test("Anthropic subscription usage parses quota windows", () => {
 	assert.equal(parsed?.dimensions[0]?.remaining, 78);
 	assert.equal(parsed?.dimensions[0]?.resetAt, Date.UTC(2026, 0, 1, 5, 0, 0));
 	assert.equal(parsed?.dimensions[2]?.name, "weekly_sonnet");
-	assert.equal(parsed?.dimensions[2]?.remaining, 20);
+	assert.equal(parsed?.dimensions[2]?.remaining, 99.2);
 });
 
 test("subscription quota fetch uses Pi OAuth token for OpenAI Codex", async () => {
@@ -553,7 +693,7 @@ test("subscription quota fetch uses Pi OAuth token for Anthropic", async () => {
 		assert.equal(fetchStub.requestedUrls[0], "https://api.anthropic.com/api/oauth/usage");
 		assert.equal(fetchStub.lastInit?.headers?.authorization, "Bearer oauth-token");
 		assert.equal(fetchStub.lastInit?.headers?.["anthropic-beta"], "oauth-2025-04-20");
-		assert.equal(parsed?.dimensions[0]?.remaining, 75);
+	assert.equal(parsed?.dimensions[0]?.remaining, 99.75);
 	} finally {
 		fetchStub.restore();
 	}

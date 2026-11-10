@@ -1,0 +1,1159 @@
+{
+	"description": "Synthetic response bodies derived from the cited public schemas and tests. Identifiers and numbers are fictional; timestamps are relative to the test run. No real credentials or captured user data.",
+	"sources": {
+		"claude": "https://github.com/steipete/CodexBar/blob/7447bc77c2497323d9c41e40164ce705533493c8/Tests/CodexBarTests/ClaudeOAuthTests.swift",
+		"codex": "https://github.com/steipete/CodexBar/blob/7447bc77c2497323d9c41e40164ce705533493c8/Sources/CodexBarCore/Providers/Codex/CodexOAuth/CodexOAuthUsageFetcher.swift",
+		"antigravity": "https://github.com/steipete/CodexBar/blob/7447bc77c2497323d9c41e40164ce705533493c8/Tests/CodexBarTests/AntigravityRemoteUsageFetcherTests.swift",
+		"commandcode": "https://github.com/steipete/CodexBar/blob/7447bc77c2497323d9c41e40164ce705533493c8/Tests/CodexBarTests/Fixtures/Providers/CommandCode/window-limits-nested.json",
+		"deepseek": "https://api-docs.deepseek.com/api/get-user-balance/",
+		"fireworks": "https://github.com/steipete/CodexBar/blob/7447bc77c2497323d9c41e40164ce705533493c8/Sources/CodexBarCore/Resources/Plugins/fireworks.js",
+		"groq": "https://github.com/steipete/CodexBar/blob/7447bc77c2497323d9c41e40164ce705533493c8/Tests/CodexBarTests/GroqUsageFetcherTests.swift",
+		"huggingface": "https://github.com/steipete/CodexBar/blob/7447bc77c2497323d9c41e40164ce705533493c8/Tests/CodexBarTests/HuggingFacePluginTests.swift",
+		"moonshot": "https://platform.kimi.ai/docs/api/balance",
+		"kimi": "https://github.com/steipete/CodexBar/blob/7447bc77c2497323d9c41e40164ce705533493c8/Tests/CodexBarTests/KimiRatioPoolTests.swift",
+		"minimax": "https://github.com/steipete/CodexBar/blob/7447bc77c2497323d9c41e40164ce705533493c8/Tests/CodexBarTests/Fixtures/Providers/MiniMax/token-plan-normal.json",
+		"opencode": "https://github.com/steipete/CodexBar/blob/7447bc77c2497323d9c41e40164ce705533493c8/Tests/CodexBarTests/OpenCodeGoCLICredentialsReaderTests.swift",
+		"openrouter": "https://openrouter.ai/docs/api_reference/limits",
+		"openai": "https://github.com/QuantumNous/new-api/blob/bd6bb53019fb7e21804b31ab7365c9b2097f4b6c/controller/channel-billing.go",
+		"xai": "https://github.com/steipete/CodexBar/blob/7447bc77c2497323d9c41e40164ce705533493c8/Tests/CodexBarTests/GrokCreditsProxyFetcherTests.swift",
+		"zai": "https://github.com/steipete/CodexBar/blob/7447bc77c2497323d9c41e40164ce705533493c8/Tests/CodexBarTests/ZaiProviderTests.swift"
+	},
+	"cases": [
+		{
+			"name": "anthropic",
+			"provider": "anthropic",
+			"model": "claude-sonnet-fixture",
+			"auth": "oauth",
+			"baseUrl": "https://api.anthropic.com",
+			"source": "claude",
+			"routes": [
+				{
+					"url": "https://api.anthropic.com/api/oauth/usage",
+					"body": {
+						"five_hour": {
+							"utilization": 12.5,
+							"resets_at": "@time:3600"
+						},
+						"seven_day": {
+							"utilization": 30,
+							"resets_at": "@time:604800"
+						},
+						"seven_day_sonnet": {
+							"utilization": 5,
+							"resets_at": "@time:604800"
+						}
+					},
+					"headers": {
+						"anthropic-beta": "oauth-2025-04-20"
+					}
+				}
+			],
+			"expected": {
+				"dimensions": [
+					{
+						"name": "5h",
+						"limit": 100,
+						"remaining": 87.5,
+						"resetAt": "@ms:3600"
+					},
+					{
+						"name": "weekly",
+						"limit": 100,
+						"remaining": 70,
+						"resetAt": "@ms:604800"
+					},
+					{
+						"name": "weekly_sonnet",
+						"limit": 100,
+						"remaining": 95,
+						"resetAt": "@ms:604800"
+					}
+				],
+				"metrics": [],
+				"footer": [
+					"5h 87%",
+					"Wk 70%"
+				]
+			}
+		},
+		{
+			"name": "anthropic-low-percent",
+			"provider": "anthropic",
+			"model": "claude-sonnet-fixture",
+			"auth": "oauth",
+			"baseUrl": "https://api.anthropic.com",
+			"source": "claude",
+			"routes": [
+				{
+					"url": "https://api.anthropic.com/api/oauth/usage",
+					"body": {
+						"five_hour": {
+							"utilization": 1,
+							"resets_at": "@time:3600"
+						},
+						"seven_day": {
+							"utilization": 0.5,
+							"resets_at": "@time:604800"
+						}
+					}
+				}
+			],
+			"expected": {
+				"dimensions": [
+					{
+						"name": "5h",
+						"limit": 100,
+						"remaining": 99,
+						"resetAt": "@ms:3600"
+					},
+					{
+						"name": "weekly",
+						"limit": 100,
+						"remaining": 99.5,
+						"resetAt": "@ms:604800"
+					}
+				],
+				"metrics": [],
+				"footer": [
+					"5h 99%",
+					"Wk 99%"
+				]
+			}
+		},
+		{
+			"name": "openai-codex",
+			"provider": "openai-codex",
+			"model": "quota-fixture",
+			"auth": "oauth",
+			"baseUrl": "https://chatgpt.com/backend-api",
+			"source": "codex",
+			"routes": [
+				{
+					"url": "https://chatgpt.com/backend-api/wham/usage",
+					"body": {
+						"rate_limit": {
+							"allowed": true,
+							"limit_reached": false,
+							"primary_window": {
+								"used_percent": 28,
+								"reset_after_seconds": 3600
+							},
+							"secondary_window": {
+								"used_percent": 65,
+								"reset_after_seconds": 604800
+							}
+						}
+					}
+				}
+			],
+			"expected": {
+				"dimensions": [
+					{
+						"name": "5h",
+						"limit": 100,
+						"remaining": 72
+					},
+					{
+						"name": "weekly",
+						"limit": 100,
+						"remaining": 35
+					}
+				],
+				"metrics": [],
+				"footer": [
+					"5h 72%",
+					"Wk 35%"
+				]
+			}
+		},
+		{
+			"name": "antigravity",
+			"provider": "antigravity",
+			"model": "quota-fixture",
+			"auth": "api_key",
+			"baseUrl": "https://daily-cloudcode-pa.googleapis.com",
+			"source": "antigravity",
+			"routes": [
+				{
+					"url": "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+					"body": {
+						"models": {
+							"quota-fixture": {
+								"quotaInfo": {
+									"remainingFraction": 0.6,
+									"resetTime": "@time:3600"
+								}
+							}
+						}
+					},
+					"method": "POST",
+					"requestBody": {
+						"project": "fixture-project"
+					}
+				},
+				{
+					"url": "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:fetchAvailableModels",
+					"body": {
+						"models": {
+							"quota-fixture": {
+								"quotaInfo": {
+									"remainingFraction": 0.6,
+									"resetTime": "@time:3600"
+								}
+							}
+						}
+					},
+					"method": "POST",
+					"requestBody": {
+						"project": "fixture-project"
+					}
+				},
+				{
+					"url": "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+					"body": {
+						"models": {
+							"quota-fixture": {
+								"quotaInfo": {
+									"remainingFraction": 0.6,
+									"resetTime": "@time:3600"
+								}
+							}
+						}
+					},
+					"method": "POST",
+					"requestBody": {
+						"project": "fixture-project"
+					}
+				}
+			],
+			"expected": {
+				"dimensions": [
+					{
+						"name": "quota",
+						"limit": 100,
+						"remaining": 60,
+						"resetAt": "@ms:3600"
+					}
+				],
+				"metrics": [],
+				"footer": [
+					"quota 60%"
+				]
+			}
+		},
+		{
+			"name": "commandcode",
+			"provider": "commandcode",
+			"model": "quota-fixture",
+			"auth": "api_key",
+			"baseUrl": "https://api.commandcode.ai",
+			"source": "commandcode",
+			"routes": [
+				{
+					"url": "https://api.commandcode.ai/alpha/whoami",
+					"body": {
+						"org": {
+							"id": "fixture-org"
+						}
+					}
+				},
+				{
+					"url": "https://api.commandcode.ai/alpha/billing/credits",
+					"body": {
+						"credits": {
+							"monthlyCredits": 7.25,
+							"purchasedCredits": 2,
+							"premiumMonthlyCredits": 0,
+							"opensourceMonthlyCredits": 0,
+							"windowLimits": {
+								"fiveHour": {
+									"cap": "4",
+									"used": "1",
+									"resetAt": "@time:3600"
+								},
+								"weekly": {
+									"cap": 20,
+									"used": 4,
+									"resetAt": "@time:604800"
+								}
+							}
+						}
+					},
+					"query": {
+						"orgId": "fixture-org"
+					}
+				}
+			],
+			"expected": {
+				"dimensions": [
+					{
+						"name": "5h",
+						"limit": 4,
+						"remaining": 3,
+						"resetAt": "@ms:3600"
+					},
+					{
+						"name": "weekly",
+						"limit": 20,
+						"remaining": 16,
+						"resetAt": "@ms:604800"
+					}
+				],
+				"metrics": [],
+				"footer": [
+					"5h 75%",
+					"Wk 80%"
+				]
+			}
+		},
+		{
+			"name": "deepseek",
+			"provider": "deepseek",
+			"model": "quota-fixture",
+			"auth": "api_key",
+			"baseUrl": "https://api.deepseek.com",
+			"source": "deepseek",
+			"routes": [
+				{
+					"url": "https://api.deepseek.com/user/balance",
+					"body": {
+						"is_available": true,
+						"balance_infos": [
+							{
+								"currency": "CNY",
+								"total_balance": "110.00",
+								"granted_balance": "10.00",
+								"topped_up_balance": "100.00"
+							}
+						]
+					}
+				}
+			],
+			"expected": {
+				"dimensions": [],
+				"metrics": [
+					{
+						"name": "balance",
+						"value": 110,
+						"unit": "CNY"
+					}
+				],
+				"footer": [
+					"\u00a5110"
+				]
+			}
+		},
+		{
+			"name": "fireworks",
+			"provider": "fireworks",
+			"model": "quota-fixture",
+			"auth": "api_key",
+			"baseUrl": "https://api.fireworks.ai/inference/v1",
+			"source": "fireworks",
+			"routes": [
+				{
+					"url": "https://api.fireworks.ai/v1/accounts",
+					"body": {
+						"accounts": [
+							{
+								"accountId": "accounts/fixture-account"
+							}
+						]
+					}
+				},
+				{
+					"url": "https://api.fireworks.ai/v1/accounts/fixture-account/billing/summary",
+					"body": {
+						"lineItems": [
+							{
+								"totalCost": {
+									"units": "12",
+									"nanos": 250000000,
+									"currencyCode": "USD"
+								}
+							},
+							{
+								"totalCost": {
+									"units": "1",
+									"nanos": 500000000,
+									"currencyCode": "USD"
+								}
+							}
+						]
+					}
+				}
+			],
+			"expected": {
+				"dimensions": [],
+				"metrics": [
+					{
+						"name": "spend",
+						"value": 13.75,
+						"unit": "USD"
+					}
+				],
+				"footer": [
+					"$13.75"
+				]
+			}
+		},
+		{
+			"name": "groq",
+			"provider": "groq",
+			"model": "quota-fixture",
+			"auth": "api_key",
+			"baseUrl": "https://api.groq.com/openai/v1",
+			"source": "groq",
+			"routes": [
+				{
+					"url": "https://api.groq.com/v1/metrics/prometheus/api/v1/query",
+					"body": {
+						"status": "success",
+						"data": {
+							"result": [
+								{
+									"value": [
+										1710000000,
+										"2"
+									]
+								}
+							]
+						}
+					},
+					"queryContains": "requests"
+				},
+				{
+					"url": "https://api.groq.com/v1/metrics/prometheus/api/v1/query",
+					"body": {
+						"status": "success",
+						"data": {
+							"result": [
+								{
+									"value": [
+										1710000000,
+										"100"
+									]
+								}
+							]
+						}
+					},
+					"queryContains": "tokens_in"
+				},
+				{
+					"url": "https://api.groq.com/v1/metrics/prometheus/api/v1/query",
+					"body": {
+						"status": "success",
+						"data": {
+							"result": [
+								{
+									"value": [
+										1710000000,
+										"50"
+									]
+								}
+							]
+						}
+					},
+					"queryContains": "tokens_out"
+				}
+			],
+			"expected": {
+				"dimensions": [],
+				"metrics": [
+					{
+						"name": "requests",
+						"value": 120,
+						"unit": "req/min"
+					},
+					{
+						"name": "tokens",
+						"value": 9000,
+						"unit": "tok/min"
+					}
+				],
+				"footer": [
+					"120 req/min",
+					"9,000 tok/min"
+				]
+			}
+		},
+		{
+			"name": "huggingface",
+			"provider": "huggingface",
+			"model": "quota-fixture",
+			"auth": "api_key",
+			"baseUrl": "https://router.huggingface.co/v1",
+			"source": "huggingface",
+			"routes": [
+				{
+					"url": "https://huggingface.co/api/settings/billing/usage-v2",
+					"body": {
+						"usage": {
+							"inferenceProviders": {
+								"usedNanoUsd": 2450000000,
+								"includedNanoUsd": 2000000000,
+								"limitNanoUsd": 0
+							}
+						}
+					}
+				},
+				{
+					"url": "https://huggingface.co/api/spaces/zero-gpu/quota",
+					"body": {
+						"base": 1500,
+						"current": 900,
+						"resetsAt": "@time:3600"
+					}
+				}
+			],
+			"expected": {
+				"dimensions": [
+					{
+						"name": "gpu",
+						"limit": 1500,
+						"remaining": 900,
+						"resetAt": "@ms:3600"
+					}
+				],
+				"metrics": [
+					{
+						"name": "spend",
+						"value": 0.45,
+						"unit": "USD"
+					}
+				],
+				"footer": [
+					"G 60%"
+				]
+			}
+		},
+		{
+			"name": "moonshotai",
+			"provider": "moonshotai",
+			"model": "quota-fixture",
+			"auth": "api_key",
+			"baseUrl": "https://api.moonshot.ai/v1",
+			"source": "moonshot",
+			"routes": [
+				{
+					"url": "https://api.moonshot.ai/v1/users/me/balance",
+					"body": {
+						"code": 0,
+						"scode": "0",
+						"status": true,
+						"data": {
+							"available_balance": 10.5,
+							"cash_balance": 10.5,
+							"voucher_balance": 0
+						}
+					}
+				}
+			],
+			"expected": {
+				"dimensions": [],
+				"metrics": [
+					{
+						"name": "balance",
+						"value": 10.5,
+						"unit": "USD"
+					}
+				],
+				"footer": [
+					"$10.50"
+				]
+			}
+		},
+		{
+			"name": "moonshotai-cn",
+			"provider": "moonshotai-cn",
+			"model": "quota-fixture",
+			"auth": "api_key",
+			"baseUrl": "https://api.moonshot.cn/v1",
+			"source": "moonshot",
+			"routes": [
+				{
+					"url": "https://api.moonshot.cn/v1/users/me/balance",
+					"body": {
+						"code": 0,
+						"scode": "0",
+						"status": true,
+						"data": {
+							"available_balance": 10.5,
+							"cash_balance": 10.5,
+							"voucher_balance": 0
+						}
+					}
+				}
+			],
+			"expected": {
+				"dimensions": [],
+				"metrics": [
+					{
+						"name": "balance",
+						"value": 10.5,
+						"unit": "CNY"
+					}
+				],
+				"footer": [
+					"\u00a510.50"
+				]
+			}
+		},
+		{
+			"name": "kimi-coding",
+			"provider": "kimi-coding",
+			"model": "quota-fixture",
+			"auth": "api_key",
+			"baseUrl": "https://api.kimi.com/coding/v1",
+			"source": "kimi",
+			"routes": [
+				{
+					"url": "https://api.kimi.com/coding/v1/usages",
+					"body": {
+						"usages": {
+							"limit_5h": {
+								"used_ratio": 0.625,
+								"reset_time": "@time:3600"
+							},
+							"limit_7d": {
+								"used_ratio": 0.125,
+								"reset_time": "@time:604800"
+							},
+							"limit_month_total": {
+								"used_ratio": 0.0056,
+								"reset_time": "@time:2592000"
+							}
+						}
+					}
+				}
+			],
+			"expected": {
+				"dimensions": [
+					{
+						"name": "5h",
+						"limit": 100,
+						"remaining": 37.5,
+						"resetAt": "@ms:3600"
+					},
+					{
+						"name": "weekly",
+						"limit": 100,
+						"remaining": 87.5,
+						"resetAt": "@ms:604800"
+					},
+					{
+						"name": "monthly",
+						"limit": 100,
+						"remaining": 99.44,
+						"resetAt": "@ms:2592000"
+					}
+				],
+				"metrics": [],
+				"footer": [
+					"5h 37%",
+					"Wk 87%",
+					"Mo 99%"
+				]
+			}
+		},
+		{
+			"name": "minimax",
+			"provider": "minimax",
+			"model": "quota-fixture",
+			"auth": "api_key",
+			"baseUrl": "https://api.minimax.io/v1",
+			"source": "minimax",
+			"routes": [
+				{
+					"url": "https://api.minimax.io/v1/token_plan/remains",
+					"body": {
+						"base_resp": {
+							"status_code": 0,
+							"status_msg": "success"
+						},
+						"data": {
+							"current_subscribe_title": "Token Plan Plus",
+							"points_balance": "14000",
+							"model_remains": [
+								{
+									"model_name": "general",
+									"current_interval_total_count": 0,
+									"current_interval_usage_count": 0,
+									"current_interval_remaining_percent": "96",
+									"start_time": "@ms:-14400",
+									"end_time": "@ms:3600",
+									"current_weekly_total_count": 0,
+									"current_weekly_usage_count": 0,
+									"current_weekly_remaining_percent": "99",
+									"weekly_start_time": "@ms:-86400",
+									"weekly_end_time": "@ms:518400"
+								}
+							]
+						}
+					}
+				},
+				{
+					"url": "https://api.minimax.io/v1/api/openplatform/coding_plan/remains",
+					"body": {
+						"base_resp": {
+							"status_code": 0,
+							"status_msg": "success"
+						},
+						"data": {
+							"current_subscribe_title": "Token Plan Plus",
+							"points_balance": "14000",
+							"model_remains": [
+								{
+									"model_name": "general",
+									"current_interval_total_count": 0,
+									"current_interval_usage_count": 0,
+									"current_interval_remaining_percent": "96",
+									"start_time": "@ms:-14400",
+									"end_time": "@ms:3600",
+									"current_weekly_total_count": 0,
+									"current_weekly_usage_count": 0,
+									"current_weekly_remaining_percent": "99",
+									"weekly_start_time": "@ms:-86400",
+									"weekly_end_time": "@ms:518400"
+								}
+							]
+						}
+					}
+				}
+			],
+			"expected": {
+				"dimensions": [
+					{
+						"name": "5h",
+						"limit": 100,
+						"remaining": 96,
+						"resetAt": "@ms:3600"
+					},
+					{
+						"name": "weekly",
+						"limit": 100,
+						"remaining": 99,
+						"resetAt": "@ms:518400"
+					}
+				],
+				"metrics": [],
+				"footer": [
+					"5h 96%",
+					"Wk 99%"
+				]
+			}
+		},
+		{
+			"name": "minimax-cn",
+			"provider": "minimax-cn",
+			"model": "quota-fixture",
+			"auth": "api_key",
+			"baseUrl": "https://api.minimaxi.com/v1",
+			"source": "minimax",
+			"routes": [
+				{
+					"url": "https://api.minimaxi.com/v1/token_plan/remains",
+					"body": {
+						"base_resp": {
+							"status_code": 0,
+							"status_msg": "success"
+						},
+						"data": {
+							"current_subscribe_title": "Token Plan Plus",
+							"points_balance": "14000",
+							"model_remains": [
+								{
+									"model_name": "general",
+									"current_interval_total_count": 0,
+									"current_interval_usage_count": 0,
+									"current_interval_remaining_percent": "96",
+									"start_time": "@ms:-14400",
+									"end_time": "@ms:3600",
+									"current_weekly_total_count": 0,
+									"current_weekly_usage_count": 0,
+									"current_weekly_remaining_percent": "99",
+									"weekly_start_time": "@ms:-86400",
+									"weekly_end_time": "@ms:518400"
+								}
+							]
+						}
+					}
+				},
+				{
+					"url": "https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains",
+					"body": {
+						"base_resp": {
+							"status_code": 0,
+							"status_msg": "success"
+						},
+						"data": {
+							"current_subscribe_title": "Token Plan Plus",
+							"points_balance": "14000",
+							"model_remains": [
+								{
+									"model_name": "general",
+									"current_interval_total_count": 0,
+									"current_interval_usage_count": 0,
+									"current_interval_remaining_percent": "96",
+									"start_time": "@ms:-14400",
+									"end_time": "@ms:3600",
+									"current_weekly_total_count": 0,
+									"current_weekly_usage_count": 0,
+									"current_weekly_remaining_percent": "99",
+									"weekly_start_time": "@ms:-86400",
+									"weekly_end_time": "@ms:518400"
+								}
+							]
+						}
+					}
+				}
+			],
+			"expected": {
+				"dimensions": [
+					{
+						"name": "5h",
+						"limit": 100,
+						"remaining": 96,
+						"resetAt": "@ms:3600"
+					},
+					{
+						"name": "weekly",
+						"limit": 100,
+						"remaining": 99,
+						"resetAt": "@ms:518400"
+					}
+				],
+				"metrics": [],
+				"footer": [
+					"5h 96%",
+					"Wk 99%"
+				]
+			}
+		},
+		{
+			"name": "opencode-go",
+			"provider": "opencode-go",
+			"model": "quota-fixture",
+			"auth": "api_key",
+			"baseUrl": "https://opencode.ai/zen/go/v1",
+			"source": "opencode",
+			"routes": [
+				{
+					"url": "https://opencode.ai/zen/go/v1/usage",
+					"body": {
+						"usage": {
+							"rolling": {
+								"percent": 0,
+								"resetsAt": "@time:3600"
+							},
+							"weekly": {
+								"percent": 75,
+								"resetsAt": "@time:604800"
+							},
+							"monthly": {
+								"percent": 100,
+								"resetsAt": "@time:2592000"
+							}
+						}
+					}
+				}
+			],
+			"expected": {
+				"dimensions": [
+					{
+						"name": "5h",
+						"limit": 100,
+						"remaining": 100,
+						"resetAt": "@ms:3600"
+					},
+					{
+						"name": "weekly",
+						"limit": 100,
+						"remaining": 25,
+						"resetAt": "@ms:604800"
+					},
+					{
+						"name": "monthly",
+						"limit": 100,
+						"remaining": 0,
+						"resetAt": "@ms:2592000"
+					}
+				],
+				"metrics": [],
+				"footer": [
+					"5h 100%",
+					"Wk 25%",
+					"Mo 0%"
+				]
+			}
+		},
+		{
+			"name": "openai",
+			"provider": "openai",
+			"model": "quota-fixture",
+			"auth": "api_key",
+			"baseUrl": "https://api.openai.com/v1",
+			"source": "openai",
+			"routes": [
+				{
+					"url": "https://api.openai.com/v1/dashboard/billing/credit_grants",
+					"body": {
+						"total_granted": 100,
+						"total_used": 30,
+						"total_available": 70,
+						"grants": {
+							"data": [
+								{
+									"expires_at": "@sec:2592000"
+								}
+							]
+						}
+					}
+				}
+			],
+			"expected": {
+				"dimensions": [
+					{
+						"name": "credits",
+						"limit": 100,
+						"remaining": 70,
+						"resetAt": "@ms:2592000"
+					}
+				],
+				"metrics": [],
+				"footer": [
+					"C 70%"
+				]
+			}
+		},
+		{
+			"name": "openrouter",
+			"provider": "openrouter",
+			"model": "quota-fixture",
+			"auth": "api_key",
+			"baseUrl": "https://openrouter.ai/api/v1",
+			"source": "openrouter",
+			"routes": [
+				{
+					"url": "https://openrouter.ai/api/v1/key",
+					"body": {
+						"data": {
+							"limit": 100,
+							"limit_remaining": 49.5,
+							"limit_reset": "monthly",
+							"usage": 50.5
+						}
+					}
+				}
+			],
+			"expected": {
+				"dimensions": [
+					{
+						"name": "monthly",
+						"limit": 100,
+						"remaining": 49.5
+					}
+				],
+				"metrics": [],
+				"footer": [
+					"Mo 49%"
+				]
+			}
+		},
+		{
+			"name": "xai",
+			"provider": "xai",
+			"model": "quota-fixture",
+			"auth": "oauth",
+			"baseUrl": "https://api.x.ai/v1",
+			"source": "xai",
+			"routes": [
+				{
+					"url": "https://cli-chat-proxy.grok.com/v1/billing",
+					"body": {
+						"config": {
+							"creditUsagePercent": 12.5,
+							"currentPeriod": {
+								"type": "USAGE_PERIOD_TYPE_WEEKLY",
+								"start": "@time:-259200",
+								"end": "@time:345600"
+							},
+							"onDemandCap": {
+								"val": 1000
+							},
+							"onDemandUsed": {
+								"val": 250
+							}
+						}
+					},
+					"headers": {
+						"x-xai-token-auth": "xai-grok-cli"
+					},
+					"query": {
+						"format": "credits"
+					}
+				}
+			],
+			"expected": {
+				"dimensions": [
+					{
+						"name": "weekly",
+						"limit": 100,
+						"remaining": 87.5,
+						"resetAt": "@ms:345600"
+					}
+				],
+				"metrics": [],
+				"footer": [
+					"Wk 87%"
+				]
+			}
+		},
+		{
+			"name": "zai",
+			"provider": "zai",
+			"model": "quota-fixture",
+			"auth": "api_key",
+			"baseUrl": "https://api.z.ai/api/coding/paas/v4",
+			"source": "zai",
+			"routes": [
+				{
+					"url": "https://api.z.ai/api/monitor/usage/quota/limit",
+					"body": {
+						"code": 200,
+						"msg": "success",
+						"success": true,
+						"data": {
+							"planName": "Pro",
+							"limits": [
+								{
+									"type": "TOKENS_LIMIT",
+									"unit": 3,
+									"number": 5,
+									"percentage": 25,
+									"nextResetTime": "@ms:3600"
+								},
+								{
+									"type": "TOKENS_LIMIT",
+									"unit": 6,
+									"number": 1,
+									"percentage": 9,
+									"nextResetTime": "@ms:604800"
+								},
+								{
+									"type": "TIME_LIMIT",
+									"unit": 5,
+									"number": 1,
+									"usage": 1000,
+									"currentValue": 224,
+									"remaining": 776,
+									"percentage": 22
+								}
+							]
+						}
+					}
+				}
+			],
+			"expected": {
+				"dimensions": [
+					{
+						"name": "5h",
+						"limit": 100,
+						"remaining": 75,
+						"resetAt": "@ms:3600"
+					},
+					{
+						"name": "weekly",
+						"limit": 100,
+						"remaining": 91,
+						"resetAt": "@ms:604800"
+					},
+					{
+						"name": "mcp",
+						"limit": 100,
+						"remaining": 77.6
+					}
+				],
+				"metrics": [],
+				"footer": [
+					"5h 75%",
+					"Wk 91%",
+					"M 77%"
+				]
+			}
+		},
+		{
+			"name": "zai-coding-cn",
+			"provider": "zai-coding-cn",
+			"model": "quota-fixture",
+			"auth": "api_key",
+			"baseUrl": "https://open.bigmodel.cn/api/coding/paas/v4",
+			"source": "zai",
+			"routes": [
+				{
+					"url": "https://open.bigmodel.cn/api/monitor/usage/quota/limit",
+					"body": {
+						"code": 200,
+						"msg": "success",
+						"success": true,
+						"data": {
+							"planName": "Pro",
+							"limits": [
+								{
+									"type": "TOKENS_LIMIT",
+									"unit": 3,
+									"number": 5,
+									"percentage": 25,
+									"nextResetTime": "@ms:3600"
+								},
+								{
+									"type": "TOKENS_LIMIT",
+									"unit": 6,
+									"number": 1,
+									"percentage": 9,
+									"nextResetTime": "@ms:604800"
+								},
+								{
+									"type": "TIME_LIMIT",
+									"unit": 5,
+									"number": 1,
+									"usage": 1000,
+									"currentValue": 224,
+									"remaining": 776,
+									"percentage": 22
+								}
+							]
+						}
+					}
+				}
+			],
+			"expected": {
+				"dimensions": [
+					{
+						"name": "5h",
+						"limit": 100,
+						"remaining": 75,
+						"resetAt": "@ms:3600"
+					},
+					{
+						"name": "weekly",
+						"limit": 100,
+						"remaining": 91,
+						"resetAt": "@ms:604800"
+					},
+					{
+						"name": "mcp",
+						"limit": 100,
+						"remaining": 77.6
+					}
+				],
+				"metrics": [],
+				"footer": [
+					"5h 75%",
+					"Wk 91%",
+					"M 77%"
+				]
+			}
+		}
+	]
+}

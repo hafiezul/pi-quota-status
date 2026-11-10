@@ -1,6 +1,13 @@
 import { dirname } from "node:path";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
-import type { LoadResult, QuotaState } from "./types.js";
+import { asRecord } from "./parse-utils.js";
+import type {
+	LoadResult,
+	ObservationSource,
+	PendingQuotaObservation,
+	QuotaObservation,
+	QuotaState,
+} from "./types.js";
 
 const LOCK_STALE_MS = 10_000;
 const LOCK_WAIT_MS = 5_000;
@@ -12,21 +19,22 @@ export function emptyState(): QuotaState {
 }
 
 export function normalizeState(value: unknown, now = Date.now()): QuotaState {
-	if (!value || typeof value !== "object") return emptyState();
-	const maybe = value as Partial<QuotaState>;
-	const observations =
-		maybe.observations && typeof maybe.observations === "object"
-			? pruneStaleObservations({ ...maybe. observations }, now)
-			: {};
-	const pendingObservations =
-		maybe.pendingObservations && typeof maybe.pendingObservations === "object"
-			? pruneStalePending(
-					{
-						...maybe.pendingObservations,
-					} as NonNullable<QuotaState["pendingObservations"]>,
-					now,
-			  )
-			: undefined;
+	const root = asRecord(value);
+	if (!root) return emptyState();
+	const observations = Object.fromEntries(
+		Object.entries(asRecord(root.observations) ?? {}).filter(
+			(entry): entry is [string, QuotaObservation] =>
+				isQuotaObservation(entry[1]),
+		),
+	);
+	pruneStaleObservations(observations, now);
+	const pendingObservations = Object.fromEntries(
+		Object.entries(asRecord(root.pendingObservations) ?? {}).filter(
+			(entry): entry is [string, PendingQuotaObservation] =>
+				isPendingObservation(entry[1]),
+		),
+	);
+	pruneStalePending(pendingObservations, now);
 	const keptPending =
 		pendingObservations && Object.keys(pendingObservations).length > 0
 			? pendingObservations
@@ -36,6 +44,116 @@ export function normalizeState(value: unknown, now = Date.now()): QuotaState {
 		observations,
 		...(keptPending ? { pendingObservations: keptPending } : {}),
 	};
+}
+
+function isFiniteNumber(value: unknown): value is number {
+	return typeof value === "number" && Number.isFinite(value);
+}
+
+function optionalNumbers(
+	record: Record<string, unknown>,
+	keys: string[],
+): boolean {
+	return keys.every(
+		(key) => record[key] === undefined || isFiniteNumber(record[key]),
+	);
+}
+
+function isObservationSource(value: unknown): value is ObservationSource {
+	return (
+		value === "headers" ||
+		value === "429" ||
+		value === "fallback" ||
+		value === "subscription" ||
+		value === "provider" ||
+		value === "codexbar"
+	);
+}
+
+function isQuotaObservation(value: unknown): value is QuotaObservation {
+	const observation = asRecord(value);
+	if (!observation) return false;
+	return (
+		typeof observation.provider === "string" &&
+		typeof observation.model === "string" &&
+		isObservationSource(observation.source) &&
+		isFiniteNumber(observation.observedAt) &&
+		isFiniteNumber(observation.updatedAt) &&
+		(observation.adapter === undefined ||
+			typeof observation.adapter === "string") &&
+		optionalNumbers(observation, ["status"]) &&
+		Array.isArray(observation.dimensions) &&
+		observation.dimensions.every((value) => {
+			const dimension = asRecord(value);
+			return (
+				dimension !== undefined &&
+				typeof dimension.name === "string" &&
+				isObservationSource(dimension.source) &&
+				isFiniteNumber(dimension.observedAt) &&
+				optionalNumbers(dimension, ["limit", "remaining", "resetAt"])
+			);
+		}) &&
+		(observation.metrics === undefined ||
+			(Array.isArray(observation.metrics) &&
+				observation.metrics.every((value) => {
+					const metric = asRecord(value);
+					return (
+						metric !== undefined &&
+						typeof metric.name === "string" &&
+						typeof metric.unit === "string" &&
+						isFiniteNumber(metric.value) &&
+						isFiniteNumber(metric.observedAt) &&
+						isObservationSource(metric.source)
+					);
+				}))) &&
+		(observation.metadata === undefined ||
+			isQuotaMetadata(observation.metadata))
+	);
+}
+
+function isQuotaMetadata(
+	value: unknown,
+): value is NonNullable<QuotaObservation["metadata"]> {
+	const metadata = asRecord(value);
+	if (!metadata) return false;
+	return (
+		[
+			"accountHeaderSent",
+			"allowed",
+			"limitReached",
+			"codexCliRpcFallback",
+		].every(
+			(key) =>
+				metadata[key] === undefined || typeof metadata[key] === "boolean",
+		) &&
+		(metadata.rateLimitReachedType === undefined ||
+			metadata.rateLimitReachedType === null ||
+			typeof metadata.rateLimitReachedType === "string") &&
+		(metadata.extraLimits === undefined ||
+			(Array.isArray(metadata.extraLimits) &&
+				metadata.extraLimits.every((value) => {
+					const limit = asRecord(value);
+					return (
+						limit !== undefined &&
+						typeof limit.name === "string" &&
+						optionalNumbers(limit, ["usedPercent", "remaining", "resetAt"])
+					);
+				})))
+	);
+}
+
+function isPendingObservation(
+	value: unknown,
+): value is PendingQuotaObservation {
+	const pending = asRecord(value);
+	return (
+		pending !== undefined &&
+		isQuotaObservation(pending.observation) &&
+		typeof pending.reason === "string" &&
+		isFiniteNumber(pending.createdAt) &&
+		isFiniteNumber(pending.updatedAt) &&
+		optionalNumbers(pending, ["priorRemaining", "newRemaining", "resetAt"])
+	);
 }
 
 function pruneStaleObservations(
@@ -57,8 +175,7 @@ function observationStale(
 		return !observation.dimensions.some(
 			(dimension) => dimension.resetAt !== undefined && dimension.resetAt > now,
 		);
-	const updatedAt = observation.updatedAt as unknown;
-	return typeof updatedAt !== "number" || updatedAt <= now - STALE_OBSERVATION_MS;
+	return observation.updatedAt <= now - STALE_OBSERVATION_MS;
 }
 
 function pruneStalePending(
@@ -66,16 +183,7 @@ function pruneStalePending(
 	now: number,
 ): NonNullable<QuotaState["pendingObservations"]> {
 	for (const key of Object.keys(pending)) {
-		const entry = pending[key] as unknown;
-		const createdAt =
-			entry && typeof entry === "object" && "createdAt" in entry
-				? (entry as { createdAt?: unknown }).createdAt
-				: undefined;
-		if (
-			typeof createdAt !== "number" ||
-			now - createdAt > STALE_PENDING_MS
-		)
-			delete pending[key];
+		if (now - pending[key].createdAt > STALE_PENDING_MS) delete pending[key];
 	}
 	return pending;
 }

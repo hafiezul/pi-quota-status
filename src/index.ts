@@ -57,7 +57,7 @@ interface RuntimeState {
 	debug: string[];
 	refreshTimer?: unknown;
 	quickRetryTimer?: unknown;
-	refreshInFlight: boolean;
+	refreshesInFlight: Set<string>;
 	sessionGeneration: number;
 }
 
@@ -68,7 +68,7 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 		state: { version: 1, observations: {} },
 		lastErrors: [],
 		debug: [],
-		refreshInFlight: false,
+		refreshesInFlight: new Set(),
 		sessionGeneration: 0,
 	};
 
@@ -170,8 +170,9 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 			);
 			return;
 		}
-		if (runtime.refreshInFlight) return;
-		runtime.refreshInFlight = true;
+		const refreshKey = `${generation}:${modelKey(ref.provider, ref.model)}`;
+		if (runtime.refreshesInFlight.has(refreshKey)) return;
+		runtime.refreshesInFlight.add(refreshKey);
 		const now = Date.now();
 		try {
 			if (subscriptionPoll) {
@@ -243,7 +244,7 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 				`${ref.provider}/${ref.model}: quota poll failed: ${errorToString(error)}`,
 			);
 		} finally {
-			runtime.refreshInFlight = false;
+			runtime.refreshesInFlight.delete(refreshKey);
 		}
 	}
 
@@ -275,6 +276,15 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 		unrefTimer(runtime.quickRetryTimer);
 	}
 
+	function restartRefreshTimer(ctx: PiContext, generation: number): void {
+		if (!isCurrentSession(generation)) return;
+		if (runtime.refreshTimer) clearInterval(runtime.refreshTimer);
+		runtime.refreshTimer = setInterval(() => {
+			refreshAndUpdateStatusInBackground(ctx, generation);
+		}, runtime.config.refreshIntervalMs ?? DEFAULT_REFRESH_INTERVAL_MS);
+		unrefTimer(runtime.refreshTimer);
+	}
+
 	pi.on("session_start", async (_event, ctx) => {
 		const generation = ++runtime.sessionGeneration;
 		if (runtime.refreshTimer) clearInterval(runtime.refreshTimer);
@@ -287,10 +297,7 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 		safeUpdateStatus(ctx, generation);
 		refreshAndUpdateStatusInBackground(ctx, generation);
 		if (!isCurrentSession(generation)) return;
-		runtime.refreshTimer = setInterval(() => {
-			refreshAndUpdateStatusInBackground(ctx, generation);
-		}, runtime.config.refreshIntervalMs ?? DEFAULT_REFRESH_INTERVAL_MS);
-		unrefTimer(runtime.refreshTimer);
+		restartRefreshTimer(ctx, generation);
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
@@ -407,6 +414,7 @@ export default function quotaStatusExtension(pi: PiExtensionAPI): void {
 			if (command === "reload") {
 				const generation = runtime.sessionGeneration;
 				await reloadFromDisk();
+				restartRefreshTimer(ctx, generation);
 				await refreshAndUpdateStatus(ctx, generation);
 				ctx.ui.notify("pi-quota-status config/state reloaded", "info");
 				return;
